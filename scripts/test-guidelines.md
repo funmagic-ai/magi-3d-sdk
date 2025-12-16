@@ -1,163 +1,152 @@
 # E2E Test Guidelines
 
-This document explains how to run the end-to-end tests for the Magi 3D SDK.
+## Quick Start
 
-## Prerequisites
-
-1. Install dependencies:
-   ```bash
-   pnpm install
-   ```
-
-2. Create a `.env` file in the project root with your API credentials:
-   ```env
-   # Tripo API Key (get at: https://platform.tripo3d.ai)
-   TRIPO_API_KEY=your-tripo-api-key
-
-   # Tencent Cloud credentials for Hunyuan (get at: https://console.cloud.tencent.com/cam/capi)
-   TENCENT_SECRET_ID=your-secret-id
-   TENCENT_SECRET_KEY=your-secret-key
-   ```
-
-## Available Test Scripts
-
-### 1. Tripo Text-to-3D Test
-
-Tests text-to-3D generation with Tripo provider.
+### 1. Setup
 
 ```bash
+# Install dependencies
+pnpm install
+
+# Create .env file with your API keys
+cp .env.example .env
+# Edit .env and add your keys
+```
+
+### 2. Run Tests
+
+```bash
+# Quick test (2 basic tests, ~2 min)
 pnpm test:tripo
-```
-
-**What it does:**
-- Creates a 3D model from the prompt "a simple wooden chair"
-- Polls until completion with progress updates
-- Returns GLB model URL and thumbnail
-
-### 2. Hunyuan Text-to-3D Test
-
-Tests text-to-3D generation with Hunyuan provider.
-
-```bash
 pnpm test:hunyuan
+
+# Full test suite (~15-20 min)
+pnpm test:tripo all
+pnpm test:hunyuan all
 ```
 
-**What it does:**
-- Creates a 3D model from the prompt "一把简单的木椅" (a simple wooden chair)
-- Polls until completion with progress updates
-- Returns GLB model URL
+## API Keys
 
-### 3. Image-to-3D Test
+Get your API keys from:
 
-Tests image-to-3D generation using a URL.
+| Provider | Where to get keys |
+|----------|-------------------|
+| Tripo | https://platform.tripo3d.ai |
+| Hunyuan | https://console.cloud.tencent.com/cam/capi |
+
+Your `.env` file should look like:
+
+```env
+TRIPO_API_KEY=your-tripo-api-key
+TENCENT_SECRET_ID=your-secret-id
+TENCENT_SECRET_KEY=your-secret-key
+```
+
+## Test Commands
+
+### Tripo Provider
 
 ```bash
-# With default test image
-pnpm test:image
-
-# With custom image URL
-pnpm test:image https://example.com/your-image.jpg
+pnpm test:tripo              # Quick (2 tests)
+pnpm test:tripo all          # All tests
+pnpm test:tripo text         # Text-to-3D tests only
+pnpm test:tripo image        # Image-to-3D tests only
+pnpm test:tripo pipeline     # Pipeline tests (rig, animate, texture, etc.)
+pnpm test:tripo <name>       # Run specific test by name
 ```
+
+### Hunyuan Provider
+
+```bash
+pnpm test:hunyuan            # Quick (2 tests)
+pnpm test:hunyuan all        # All tests
+pnpm test:hunyuan text       # Text-to-3D tests only
+pnpm test:hunyuan image      # Image-to-3D tests only
+pnpm test:hunyuan pipeline   # Pipeline tests
+pnpm test:hunyuan <name>     # Run specific test by name
+```
+
+## Available Tests
+
+### Tripo Tests
+
+| Test Name | Type | Description |
+|-----------|------|-------------|
+| `text-to-3d-basic` | TEXT_TO_3D | Basic prompt |
+| `text-to-3d-with-options` | TEXT_TO_3D | With model_version, pbr, texture_quality |
+| `text-to-3d-negative-prompt` | TEXT_TO_3D | With negative prompt |
+| `image-to-3d-basic` | IMAGE_TO_3D | From URL |
+| `image-to-3d-with-prompt` | IMAGE_TO_3D | With refinement prompt |
+| `image-to-3d-with-options` | IMAGE_TO_3D | With provider options |
+| `pipeline-full` | Pipeline | Text → Rig → Animate → Convert |
+| `pipeline-texture` | Pipeline | Text → Re-texture |
+| `pipeline-decimate` | Pipeline | Text → Reduce polygons |
+
+### Hunyuan Tests
+
+| Test Name | Type | Description |
+|-----------|------|-------------|
+| `text-to-3d-basic` | TEXT_TO_3D | Basic Chinese prompt |
+| `text-to-3d-with-pbr` | TEXT_TO_3D | EnablePBR=true |
+| `text-to-3d-lowpoly` | TEXT_TO_3D | GenerateType=LowPoly |
+| `text-to-3d-geometry` | TEXT_TO_3D | Geometry only (no texture) |
+| `text-to-3d-high-poly` | TEXT_TO_3D | FaceCount=500000 |
+| `image-to-3d-url` | IMAGE_TO_3D | From URL |
+| `image-to-3d-base64` | IMAGE_TO_3D | From local file (scripts/image.png) |
+| `image-to-3d-with-prompt` | IMAGE_TO_3D | With refinement prompt |
+| `image-to-3d-with-options` | IMAGE_TO_3D | EnablePBR + FaceCount |
+| `pipeline-decimate` | Pipeline | Text → Reduce faces |
+| `pipeline-texture` | Pipeline | Geometry → Add texture |
 
 ## Using Local Images
 
-### Option 1: Hunyuan with Base64 (Recommended for Local Files)
-
-Hunyuan supports base64-encoded images directly. Create a test script:
-
-```typescript
-import { HunyuanProvider, Magi3DClient, TaskType } from '../src';
-import { readFileSync } from 'fs';
-import { config } from 'dotenv';
-
-config();
-
-// Read local image and convert to base64
-const imageBuffer = readFileSync('./scripts/image.png');
-const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
-
-const provider = new HunyuanProvider({
-  secretId: process.env.TENCENT_SECRET_ID!,
-  secretKey: process.env.TENCENT_SECRET_KEY!,
-  region: 'ap-guangzhou'
-});
-
-const client = new Magi3DClient(provider);
-
-const taskId = await client.createTask({
-  type: TaskType.IMAGE_TO_3D,
-  input: base64Image,
-  prompt: 'optional refinement prompt'
-});
-
-const result = await client.pollUntilDone(taskId);
-console.log('Model:', result.result?.modelGlb);
-```
-
-### Option 2: Tripo with Image Upload
-
-Tripo requires URL inputs. For local files, you must first upload the image:
-
-1. **Upload to Tripo's storage** (using their upload API)
-2. **Upload to any public URL** (S3, Cloudflare, etc.)
-3. **Use a temporary file hosting service**
-
-Example with pre-uploaded URL:
-```bash
-pnpm test:image https://your-hosted-image.com/image.png
-```
-
-## Quick Test with Local Image (scripts/image.png)
-
-To test with the local `scripts/image.png` file using Hunyuan:
+Hunyuan supports base64 images. Place your image at `scripts/image.png` and run:
 
 ```bash
-pnpm tsx scripts/test-local-image.ts
+pnpm test:hunyuan image-to-3d-base64
 ```
 
-## Test Output
+For Tripo, upload your image to a public URL first, then modify the `TEST_IMAGE_URL` in `test-tripo-full.ts`.
 
-Successful tests will show:
-- Progress bar with percentage
-- Final status (SUCCEEDED/FAILED)
-- Model URLs (GLB, thumbnail)
+## Example Output
 
-Example output:
 ```
-=== Tripo Provider E2E Test ===
+╔════════════════════════════════════════════════════════════╗
+║          Tripo Provider - Comprehensive E2E Tests          ║
+╚════════════════════════════════════════════════════════════╝
 
-1. Creating provider and client...
-   Done
-
-2. Testing Text-to-3D generation...
+[TEST] Text-to-3D - Basic
    Prompt: "a simple wooden chair"
    Task ID: abc123-def456
-   Polling for completion...
-
    [====================] 100% - SUCCEEDED
+   Result:
+     Status: SUCCEEDED
+     GLB: https://tripo-data...
 
-3. Result:
-   Status: SUCCEEDED
-   GLB Model: https://...
-   Thumbnail: https://...
+════════════════════════════════════════════════════════════
+                        TEST SUMMARY
+════════════════════════════════════════════════════════════
+  ✓ text-to-3d-basic
+  ✓ image-to-3d-basic
 
-=== Test PASSED ===
+  Total: 2 | Passed: 2 | Failed: 0
+════════════════════════════════════════════════════════════
 ```
 
 ## Troubleshooting
 
-### "TRIPO_API_KEY environment variable is required"
-- Ensure `.env` file exists in project root
-- Check that the key is named correctly
+| Error | Solution |
+|-------|----------|
+| `TRIPO_API_KEY required` | Add key to `.env` file |
+| `TENCENT_SECRET_ID required` | Add both ID and KEY to `.env` |
+| `Task timed out` | Increase timeout or retry later |
+| `TripoProvider requires URL` | Use URL, not local file path |
 
-### "TENCENT_SECRET_ID and TENCENT_SECRET_KEY are required"
-- Both credentials are needed for Hunyuan
-- Get them from Tencent Cloud console
+## Test Timeouts
 
-### Timeout errors
-- Increase timeout in test script (default: 5 minutes for Tripo, 10 minutes for Hunyuan)
-- Check API quotas
+| Provider | Default Timeout |
+|----------|-----------------|
+| Tripo | 5 minutes per task |
+| Hunyuan | 10 minutes per task |
 
-### "TripoProvider requires URL inputs"
-- Tripo doesn't accept base64 directly
-- Use a URL or switch to Hunyuan for local files
+Pipeline tests may take longer as they run multiple sequential tasks.

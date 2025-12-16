@@ -44,10 +44,8 @@
     "typecheck": "tsc --noEmit",
     "docs": "typedoc src/index.ts",
     "prepublishOnly": "pnpm run build && pnpm run test",
-    "test:tripo": "tsx scripts/test-tripo.ts",
-    "test:hunyuan": "tsx scripts/test-hunyuan.ts",
-    "test:image": "tsx scripts/test-image-to-3d.ts",
-    "test:local": "tsx scripts/test-local-image.ts"
+    "test:tripo": "tsx scripts/test-tripo-full.ts",
+    "test:hunyuan": "tsx scripts/test-hunyuan-full.ts"
   },
   "keywords": [
     "3d",
