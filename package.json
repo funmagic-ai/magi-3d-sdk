@@ -1,0 +1,75 @@
+{
+  "name": "magi-3d",
+  "version": "1.0.0",
+  "description": "A universal TypeScript SDK for 3D generative AI providers.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.mjs",
+      "require": "./dist/server/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.mjs",
+      "require": "./dist/react/index.js"
+    }
+  },
+  "peerDependencies": {
+    "react": ">=17.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "docs": "typedoc src/index.ts",
+    "prepublishOnly": "pnpm run build && pnpm run test",
+    "test:tripo": "tsx scripts/test-tripo.ts",
+    "test:hunyuan": "tsx scripts/test-hunyuan.ts",
+    "test:image": "tsx scripts/test-image-to-3d.ts",
+    "test:local": "tsx scripts/test-local-image.ts"
+  },
+  "keywords": [
+    "3d",
+    "ai",
+    "sdk",
+    "typescript"
+  ],
+  "author": "magify pte ltd (funmagic.ai)",
+  "license": "MIT",
+  "packageManager": "pnpm@10.14.0",
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "dotenv": "^17.2.3",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typedoc": "^0.28.14",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "eventemitter3": "^5.0.1"
+  }
+}

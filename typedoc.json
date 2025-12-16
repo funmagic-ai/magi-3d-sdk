@@ -1,0 +1,42 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "src/server/index.ts",
+    "src/react/index.ts"
+  ],
+  "entryPointStrategy": "expand",
+  "out": "docs",
+  "name": "Magi 3D SDK",
+  "readme": "README.md",
+  "includeVersion": true,
+  "lightHighlightTheme": "github-light",
+  "darkHighlightTheme": "github-dark",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "categoryOrder": [
+    "Core",
+    "Providers",
+    "React Hooks",
+    "Types",
+    "Utilities",
+    "*"
+  ],
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true
+  },
+  "sort": [
+    "source-order",
+    "alphabetical"
+  ],
+  "visibilityFilters": {
+    "protected": false,
+    "private": false,
+    "inherited": true,
+    "@internal": false
+  },
+  "searchInComments": true,
+  "cleanOutputDir": true
+}
