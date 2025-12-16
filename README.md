@@ -4,9 +4,9 @@ Universal TypeScript SDK for 3D generative AI providers. Generate 3D models from
 
 ## Features
 
-- **Multi-provider support**: Tripo, Hunyuan (more coming soon)
-- **Unified API**: Same interface across all providers
-- **React Hooks**: `useGenerate3D`, `useTaskStatus`, `usePostProcess`
+- **Multi-provider support**: Tripo, Hunyuan (Tencent Cloud)
+- **Unified API**: Single `createTask()` method for all operations
+- **React Hooks**: `useCreateTask`, `useTaskStatus`, `usePolling`
 - **TypeScript-first**: Full type safety and IntelliSense
 - **Modern**: ESM + CJS, tree-shakeable
 
@@ -26,23 +26,23 @@ The SDK follows a similar pattern to Vercel AI SDK:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  FRONTEND (React)                                                │
-│  ─────────────────                                               │
-│  import { useGenerate3D } from 'magi-3d/react';                 │
-│                                                                  │
-│  Hook handles:                                                   │
-│    POST /api/3d/generate  →  submit task                        │
+│  FRONTEND (React)                                               │
+│  ─────────────────                                              │
+│  import { useCreateTask, TaskType } from 'magi-3d/react';       │
+│                                                                 │
+│  Hook handles:                                                  │
+│    POST /api/3d/task      →  submit task                        │
 │    GET  /api/3d/task/:id  →  poll status                        │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  BACKEND (Your API Routes)                                       │
-│  ───────────────────────────────────────────────────────────────│
-│  import { TripoProvider } from 'magi-3d/server';                │
-│                                                                  │
-│  POST /api/3d/generate  → provider.generate(params)             │
-│  GET  /api/3d/task/:id  → provider.getTaskStatus(id)            │
+│  BACKEND (Your API Routes)                                      │
+│  ─────────────────────────────────────────────────────────────  │
+│  import { Magi3DClient, TripoProvider } from 'magi-3d/server';  │
+│                                                                 │
+│  POST /api/3d/task      → client.createTask(params)             │
+│  GET  /api/3d/task/:id  → client.getTask(id)                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -50,34 +50,27 @@ The SDK follows a similar pattern to Vercel AI SDK:
 
 ### 1. Backend: Create API Routes
 
-Create API routes that use the SDK providers:
-
 ```typescript
-// app/api/3d/generate/route.ts (Next.js example)
-import { TripoProvider } from 'magi-3d/server';
+// app/api/3d/task/route.ts (Next.js App Router)
+import { Magi3DClient, TripoProvider, TaskType } from 'magi-3d/server';
 
 const provider = new TripoProvider({
   apiKey: process.env.TRIPO_API_KEY!
 });
+const client = new Magi3DClient(provider);
 
+// Create task
 export async function POST(req: Request) {
   const params = await req.json();
-  const taskId = await provider.generate(params);
+  const taskId = await client.createTask(params);
   return Response.json({ taskId });
 }
-```
 
-```typescript
-// app/api/3d/task/[taskId]/route.ts
-import { TripoProvider } from 'magi-3d/server';
-
-const provider = new TripoProvider({
-  apiKey: process.env.TRIPO_API_KEY!
-});
-
-export async function GET(req: Request, { params }: { params: Promise<{ taskId: string }> }) {
-  const { taskId } = await params;
-  const task = await provider.getTaskStatus(taskId);
+// Get task status
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const taskId = searchParams.get('id')!;
+  const task = await client.getTask(taskId);
   return Response.json(task);
 }
 ```
@@ -87,10 +80,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ taskId: 
 ```tsx
 'use client';
 
-import { useGenerate3D } from 'magi-3d/react';
+import { useCreateTask, TaskType, TaskStatus } from 'magi-3d/react';
 
 export function TextTo3DGenerator() {
-  const { generate, task, isLoading, progress, error } = useGenerate3D({
+  const { createTask, task, isLoading, progress, error } = useCreateTask({
     api: '/api/3d',
     onSuccess: (task) => console.log('Done!', task.result?.modelGlb)
   });
@@ -98,16 +91,16 @@ export function TextTo3DGenerator() {
   return (
     <div>
       <button
-        onClick={() => generate({
-          type: 'TEXT_TO_3D',
-          prompt: 'a small cat'
+        onClick={() => createTask({
+          type: TaskType.TEXT_TO_3D,
+          prompt: 'a cute cat sitting on a cushion'
         })}
         disabled={isLoading}
       >
         {isLoading ? `Generating (${progress}%)` : 'Generate'}
       </button>
 
-      {task?.status === 'SUCCEEDED' && (
+      {task?.status === TaskStatus.SUCCEEDED && (
         <a href={task.result?.modelGlb} download>Download GLB</a>
       )}
     </div>
@@ -115,157 +108,181 @@ export function TextTo3DGenerator() {
 }
 ```
 
+### 3. Direct Usage (Node.js / Scripts)
+
+```typescript
+import { Magi3DClient, TripoProvider, TaskType } from 'magi-3d';
+
+const provider = new TripoProvider({ apiKey: 'your-api-key' });
+const client = new Magi3DClient(provider);
+
+// Create task
+const taskId = await client.createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a medieval sword'
+});
+
+// Poll until complete
+const result = await client.pollUntilDone(taskId, {
+  onProgress: (task) => console.log(`${task.progress}%`)
+});
+
+console.log('Model URL:', result.result?.modelGlb);
+```
+
+## Supported Providers
+
+### Tripo
+
+```typescript
+import { TripoProvider } from 'magi-3d/server';
+
+const provider = new TripoProvider({
+  apiKey: 'your-tripo-api-key'
+});
+```
+
+**Supported Task Types:**
+- `TEXT_TO_3D` - Generate from text prompt
+- `IMAGE_TO_3D` - Generate from image URL
+- `MULTIVIEW_TO_3D` - Generate from multiple views
+- `RIG` - Add skeletal rigging
+- `ANIMATE` - Apply animation presets
+- `TEXTURE` - Re-texture model
+- `REFINE` - Improve quality
+- `DECIMATE` - Reduce polygons
+- `CONVERT` - Format conversion
+
+### Hunyuan (Tencent Cloud)
+
+```typescript
+import { HunyuanProvider } from 'magi-3d/server';
+
+const provider = new HunyuanProvider({
+  secretId: 'your-tencent-secret-id',
+  secretKey: 'your-tencent-secret-key',
+  region: 'ap-guangzhou'
+});
+```
+
+**Supported Task Types:**
+- `TEXT_TO_3D` - Generate from text prompt
+- `IMAGE_TO_3D` - Generate from image URL or base64
+- `TEXTURE` - Add texture to geometry
+- `DECIMATE` - Reduce face count
+- `CONVERT` - Format conversion
+
 ## React Hooks
 
-### `useGenerate3D`
+### `useCreateTask`
 
-Main hook for 3D generation tasks.
+Unified hook for all task types (generation and post-processing).
 
 ```tsx
-import { useGenerate3D } from 'magi-3d/react';
+import { useCreateTask, TaskType } from 'magi-3d/react';
 
 const {
-  generate,    // (params) => Promise<taskId>
+  createTask,  // (params: TaskParams) => Promise<string>
   task,        // StandardTask | null
   taskId,      // string | null
   isLoading,   // boolean
   progress,    // number (0-100)
   error,       // Error | null
   reset,       // () => void
-  stop         // () => void - stop polling
-} = useGenerate3D({
-  api: '/api/3d',           // Your backend endpoint
-  pollingInterval: 3000,    // Poll every 3s (default)
-  timeout: 300000,          // 5 min timeout (default)
-  headers: {},              // Additional headers
-  onProgress: (task) => {}, // Progress callback
-  onSuccess: (task) => {},  // Success callback
-  onError: (error) => {}    // Error callback
-});
-```
-
-### `usePostProcess`
-
-Hook for post-processing operations (conversion, rigging, etc.).
-
-```tsx
-import { usePostProcess } from 'magi-3d/react';
-
-const { postProcess, task, isLoading, progress, error } = usePostProcess({
-  api: '/api/3d'
+  stop         // () => void
+} = useCreateTask({
+  api: '/api/3d',
+  pollingInterval: 3000,
+  timeout: 300000,
+  onProgress: (task) => {},
+  onSuccess: (task) => {},
+  onError: (error) => {}
 });
 
-// Convert to FBX
-postProcess({
-  action: 'CONVERT',
-  taskId: originalTaskId,
-  format: 'fbx'
-});
+// Text-to-3D
+createTask({ type: TaskType.TEXT_TO_3D, prompt: 'a cat' });
 
-// Add rigging
-postProcess({
-  action: 'RIG',
-  taskId: originalTaskId
-});
+// Image-to-3D
+createTask({ type: TaskType.IMAGE_TO_3D, input: 'https://...' });
+
+// Post-processing (rigging)
+createTask({ type: TaskType.RIG, taskId: 'original-id', skeleton: 'humanoid' });
+
+// Format conversion
+createTask({ type: TaskType.CONVERT, taskId: 'original-id', format: 'fbx' });
 ```
 
 ### `useTaskStatus`
 
-Hook for polling an existing task's status.
+Track an existing task by ID.
 
 ```tsx
 import { useTaskStatus } from 'magi-3d/react';
 
-const { task, isPolling, progress, startPolling, stopPolling } = useTaskStatus({
+const { task, progress, startPolling, stopPolling } = useTaskStatus({
   api: '/api/3d',
   onComplete: (task) => console.log('Done!')
 });
 
-// Start polling a specific task
-startPolling('task-id-here');
-```
-
-## Server Providers
-
-### TripoProvider
-
-Direct integration with Tripo AI API.
-
-```typescript
-import { TripoProvider } from 'magi-3d/server';
-
-const provider = new TripoProvider({
-  apiKey: 'your-api-key',
-  baseUrl: 'https://api.tripo3d.ai',  // optional
-  timeout: 120000  // optional
-});
-
-// Generate
-const taskId = await provider.generate({
-  type: 'TEXT_TO_3D',
-  prompt: 'a robot',
-  providerOptions: {
-    model_version: 'v2.5-20250123',
-    pbr: true
-  }
-});
-
-// Check status
-const task = await provider.getTaskStatus(taskId);
-
-// Post-process
-const convertTaskId = await provider.postprocess({
-  action: 'CONVERT',
-  taskId,
-  format: 'fbx'
-});
+startPolling('existing-task-id');
 ```
 
 ## Task Types
 
-- `TEXT_TO_3D`: Generate from text prompt
-- `IMAGE_TO_3D`: Generate from single image
-- `REFINE`: Refine existing model
-- `RIGGING`: Add bone rigging
+All operations use a single `createTask()` method. The `type` field determines the operation:
+
+| Type | Description | Required Params |
+|------|-------------|-----------------|
+| `TEXT_TO_3D` | Generate from text | `prompt` |
+| `IMAGE_TO_3D` | Generate from image | `input` (URL or base64) |
+| `MULTIVIEW_TO_3D` | Generate from multiple views | `inputs` (array of URLs) |
+| `RIG` | Add skeletal rigging | `taskId`, `skeleton` |
+| `ANIMATE` | Apply animation | `taskId`, `animation` |
+| `TEXTURE` | Re-texture model | `taskId`, `prompt` |
+| `REFINE` | Improve quality | `taskId` |
+| `DECIMATE` | Reduce polygons | `taskId`, `targetFaceCount` |
+| `CONVERT` | Format conversion | `taskId`, `format` |
 
 ## Task Status
 
-- `PENDING`: Waiting to start
-- `PROCESSING`: Generation in progress
-- `SUCCEEDED`: Complete with results
-- `FAILED`: Generation failed
-- `CANCELED`: User cancelled
+| Status | Description |
+|--------|-------------|
+| `PENDING` | Waiting to start |
+| `PROCESSING` | Generation in progress |
+| `SUCCEEDED` | Complete with results |
+| `FAILED` | Generation failed |
+| `CANCELED` | User cancelled |
 
-## Post-Processing Actions
-
-- `CONVERT`: Format conversion (GLB, USDZ, FBX, OBJ, STL)
-- `RIG`: Add bone rigging
-- `TEXTURE`: Re-texturing
-- `REFINE`: Model refinement
-- `DECIMATE`: Polygon reduction
-
-## Provider-Specific Options
+## Provider Options
 
 ### Tripo Options
 
 ```typescript
-{
-  model_version?: 'Turbo-v1.0-20250506' | 'v3.0-20250812' | 'v2.5-20250123' | 'v2.0-20240919';
-  pbr?: boolean;                    // Enable PBR materials
-  texture?: boolean;                // Enable texturing
-  texture_quality?: 'standard' | 'detailed';
-  face_limit?: number;              // Face count limit
-  quad?: boolean;                   // Quad mesh output
-  auto_size?: boolean;              // Scale to real-world dimensions
-}
+createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a robot',
+  providerOptions: {
+    model_version: 'v2.5-20250123',
+    pbr: true,
+    texture_quality: 'detailed',
+    face_limit: 50000
+  }
+});
 ```
 
-## Examples
+### Hunyuan Options
 
-See `/examples` directory for:
-- `nextjs-api-route.ts` - Next.js API route handlers
-- `browser-react.tsx` - React component examples
-- `node-basic.ts` - Node.js usage
+```typescript
+createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a chair',
+  providerOptions: {
+    EnablePBR: true,
+    FaceCount: 100000,
+    GenerateType: 'Normal'  // 'Normal' | 'LowPoly' | 'Geometry'
+  }
+});
+```
 
 ## TypeScript Support
 
@@ -273,23 +290,38 @@ Full TypeScript support with detailed type definitions:
 
 ```typescript
 import type {
-  GenerateParams,
+  TaskParams,
   StandardTask,
   TaskArtifacts,
-  TripoOptions
+  TripoOptions,
+  HunyuanOptions
 } from 'magi-3d/server';
 
 import type {
-  UseGenerate3DOptions,
-  UseGenerate3DReturn
+  UseCreateTaskOptions,
+  UseCreateTaskReturn
 } from 'magi-3d/react';
 ```
 
+## E2E Testing
+
+```bash
+# Setup
+cp .env.example .env
+# Edit .env with your API keys
+
+# Run tests
+pnpm test:tripo      # Quick Tripo test
+pnpm test:hunyuan    # Quick Hunyuan test
+pnpm test:tripo all  # Full Tripo test suite
+```
+
+See `scripts/test-guidelines.md` for detailed test documentation.
+
 ## Requirements
 
-- Node.js >= 16.0.0 (for server-side)
-- React >= 17.0.0 (for hooks)
-- Modern browser with ES2020 support
+- Node.js >= 18.0.0 (for server-side)
+- React >= 17.0.0 (for hooks, optional peer dependency)
 
 ## License
 
@@ -297,5 +329,5 @@ MIT
 
 ## Support
 
-- Issues: [GitHub Issues](https://github.com/your-org/magi-3d-sdk/issues)
+- Issues: [GitHub Issues](https://github.com/funmagic-ai/magi-3d-sdk/issues)
 - Email: support@funmagic.ai

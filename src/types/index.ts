@@ -1,6 +1,7 @@
 /**
+ * Type definitions for the Magi 3D SDK.
+ *
  * @module types
- * @description Type definitions for the Magi 3D SDK
  */
 
 // Central barrel export for all type definitions
