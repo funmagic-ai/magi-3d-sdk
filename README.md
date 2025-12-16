@@ -259,91 +259,158 @@ All operations use a single `createTask()` method. The `type` field determines t
 
 #### Model Versions
 
-| Version | Release Date | Description |
-|---------|--------------|-------------|
-| `Turbo-v1.0-20250506` | 2025-05-06 | Fast generation (~10s), good for prototyping |
-| `v3.0-20250812` | 2025-08-12 | Latest quality, supports geometry_quality |
-| `v2.5-20250123` | 2025-01-23 | Balanced quality and speed |
-| `v2.0-20240919` | 2024-09-19 | Stable, widely tested |
-| `v1.4-20240625` | 2024-06-25 | Legacy version |
+| Version | Speed | Quality | Notes |
+|---------|-------|---------|-------|
+| `Turbo-v1.0-20250506` | ~10s | Good | Fast prototyping |
+| `v3.0-20250812` | ~60s | Best | Supports `geometry_quality` for Ultra version|
+| `v2.5-20250123` | ~45s | High | Balanced |
+| `v2.0-20240919` | ~45s | High | Stable,Fast |
+| `v1.4-20240625` | ~40s | Medium | Legacy |
 
-#### Parameters
+#### TEXT_TO_3D / IMAGE_TO_3D Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `model_version` | string | latest | Model version (see above) |
-| `pbr` | boolean | true | Enable PBR materials |
-| `texture` | boolean | true | Enable texturing |
-| `texture_quality` | `'standard'` \| `'detailed'` | standard | Texture resolution |
-| `texture_alignment` | `'original_image'` \| `'geometry'` | - | Texture alignment strategy |
-| `texture_seed` | number | random | Seed for reproducible textures |
-| `face_limit` | number | - | Maximum face count |
-| `quad` | boolean | false | Quad mesh output (forces FBX) |
-| `smart_low_poly` | boolean | false | Hand-crafted low-poly topology |
-| `generate_parts` | boolean | false | Generate segmented model |
-| `geometry_quality` | `'standard'` \| `'detailed'` | standard | Geometry quality (v3.0+ only) |
-| `auto_size` | boolean | false | Scale to real-world dimensions |
-| `orientation` | `'default'` \| `'align_image'` | default | Model orientation |
-| `model_seed` | number | random | Seed for reproducible geometry |
+| Parameter | Type | Default | Versions | Description |
+|-----------|------|---------|----------|-------------|
+| `model_version` | string | latest | All | Model version |
+| `pbr` | boolean | true | All | Enable PBR materials |
+| `texture` | boolean | true | All | Enable texturing |
+| `texture_quality` | `'standard'` \| `'detailed'` | standard | All | Texture resolution |
+| `texture_alignment` | `'original_image'` \| `'geometry'` | - | v2.0+ | Texture alignment |
+| `texture_seed` | number | random | v2.0+ | Reproducible textures |
+| `face_limit` | number | - | All | Max face count |
+| `quad` | boolean | false | v2.0+ | Quad mesh (forces FBX) |
+| `geometry_quality` | `'standard'` \| `'detailed'` | standard | **v3.0+ only** | Geometry detail level |
+| `auto_size` | boolean | false | v2.0+ | Real-world scale (meters) |
+| `orientation` | `'default'` \| `'align_image'` | default | v2.0+ | Model orientation |
+| `model_seed` | number | random | v2.0+ | Reproducible geometry |
 
-#### Rigging & Animation Parameters
+#### RIG Parameters
+
+| Parameter | Type | Values | Description |
+|-----------|------|--------|-------------|
+| `skeleton` | string | `'biped'`, `'quadruped'`, `'hexapod'`, `'octopod'`, `'avian'`, `'serpentine'`, `'aquatic'` | Skeleton type |
+| `outFormat` | string | `'glb'`, `'fbx'` | Output format |
+
+#### ANIMATE Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `animation` | string | Animation preset (e.g., `'preset:walk'`, `'preset:run'`, `'preset:idle'`) |
+| `outFormat` | string | `'glb'` or `'fbx'` |
+
+#### TEXTURE Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `prompt` | string | Texture description |
+| `enablePBR` | boolean | Enable PBR materials |
+
+#### DECIMATE Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `targetFaceCount` | number | Target polygon count |
+
+#### CONVERT Parameters
 
 | Parameter | Type | Values |
 |-----------|------|--------|
-| `out_format` | string | `'glb'`, `'fbx'` |
-| `rig_type` | string | `'biped'`, `'quadruped'`, `'hexapod'`, `'octopod'`, `'avian'`, `'serpentine'`, `'aquatic'` |
-| `animation` | string | Animation preset name (e.g., `'preset:walk'`) |
+| `format` | string | `'glb'`, `'fbx'`, `'usdz'`, `'obj'`, `'stl'` |
 
 #### Example
 
 ```typescript
+// Text-to-3D with v3.0 features
 createTask({
   type: TaskType.TEXT_TO_3D,
-  prompt: 'a robot',
+  prompt: 'a futuristic robot',
   providerOptions: {
     model_version: 'v3.0-20250812',
     pbr: true,
     texture_quality: 'detailed',
-    geometry_quality: 'detailed',
+    geometry_quality: 'detailed',  // v3.0+ only
     face_limit: 50000
   }
 });
+
+// Rigging
+createTask({
+  type: TaskType.RIG,
+  taskId: 'original-task-id',
+  skeleton: 'biped',
+  outFormat: 'fbx'
+});
+
+// Animation
+createTask({
+  type: TaskType.ANIMATE,
+  taskId: 'rigged-task-id',
+  animation: 'preset:walk',
+  outFormat: 'glb'
+});
 ```
+
+---
 
 ### Hunyuan (Tencent Cloud)
 
-Hunyuan offers two versions:
-- **Professional (Pro)**: Higher quality, up to 1.5M faces, 3 concurrent tasks
-- **Rapid**: Faster generation, 1 concurrent task
+#### Versions
 
-#### Parameters
+| Version | Concurrency | Max Faces | Speed | Use Case |
+|---------|-------------|-----------|-------|----------|
+| **Professional (Pro)** | 3 | 1,500,000 | ~120s | High-quality production |
+| **Rapid** | 1 | - | ~30s | Fast prototyping |
+
+#### TEXT_TO_3D / IMAGE_TO_3D Parameters (Professional)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `EnablePBR` | boolean | false | Enable PBR materials |
 | `FaceCount` | number | 500,000 | Face count (40,000 - 1,500,000) |
 | `GenerateType` | string | `'Normal'` | Generation mode (see below) |
-| `PolygonType` | `'triangle'` \| `'quadrilateral'` | triangle | Mesh polygon type |
-| `EnableGeometry` | boolean | false | Generate white model without texture |
-| `ResultFormat` | string | `'OBJ'` | Output format (Rapid version) |
-| `FaceLevel` | `'high'` \| `'medium'` \| `'low'` | - | Face reduction level (for DECIMATE) |
+| `PolygonType` | `'triangle'` \| `'quadrilateral'` | triangle | Mesh type (LowPoly only) |
 
-#### GenerateType Values
+#### TEXT_TO_3D / IMAGE_TO_3D Parameters (Rapid)
 
-| Value | Description |
-|-------|-------------|
-| `'Normal'` | Standard textured model |
-| `'LowPoly'` | Optimized low-poly model |
-| `'Geometry'` | White model without texture |
-| `'Sketch'` | Generate from sketch/line art (supports prompt + image) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `EnablePBR` | boolean | false | Enable PBR materials |
+| `EnableGeometry` | boolean | false | White model without texture |
+| `ResultFormat` | string | `'OBJ'` | Output: `'OBJ'`, `'GLB'`, `'STL'`, `'USDZ'`, `'FBX'`, `'MP4'` |
 
-#### ResultFormat Values (Rapid Version)
+#### GenerateType Values (Professional)
 
-`'OBJ'`, `'GLB'`, `'STL'`, `'USDZ'`, `'FBX'`, `'MP4'`
+| Value | Description | Notes |
+|-------|-------------|-------|
+| `'Normal'` | Standard textured model | Default |
+| `'LowPoly'` | Optimized low-poly | Supports `PolygonType` |
+| `'Geometry'` | White model (no texture) | `EnablePBR` ignored |
+| `'Sketch'` | From sketch/line art | Can combine with `prompt` |
+
+#### TEXTURE Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `prompt` | string | Texture description (optional) |
+| `EnablePBR` | boolean | Enable PBR materials |
+
+#### DECIMATE Parameters
+
+| Parameter | Type | Values | Description |
+|-----------|------|--------|-------------|
+| `FaceLevel` | string | `'high'`, `'medium'`, `'low'` | Reduction level |
+| `PolygonType` | string | `'triangle'`, `'quadrilateral'` | Output mesh type |
+
+#### CONVERT Parameters (Sync)
+
+| Parameter | Type | Values |
+|-----------|------|--------|
+| `format` | string | `'STL'`, `'USDZ'`, `'FBX'`, `'MP4'`, `'GIF'` |
 
 #### Example
 
 ```typescript
+// Professional: High-quality generation
 createTask({
   type: TaskType.TEXT_TO_3D,
   prompt: '一只可爱的猫',  // Chinese prompts work well
@@ -354,13 +421,33 @@ createTask({
   }
 });
 
-// LowPoly style
+// Professional: LowPoly with quad mesh
 createTask({
   type: TaskType.TEXT_TO_3D,
   prompt: 'a cute rabbit',
   providerOptions: {
     GenerateType: 'LowPoly',
     PolygonType: 'quadrilateral'
+  }
+});
+
+// Rapid: Fast generation with specific format
+createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a simple chair',
+  providerOptions: {
+    ResultFormat: 'GLB',
+    EnablePBR: true
+  }
+});
+
+// Decimate: Reduce polygon count
+createTask({
+  type: TaskType.DECIMATE,
+  taskId: 'original-task-id',
+  providerOptions: {
+    FaceLevel: 'low',
+    PolygonType: 'triangle'
   }
 });
 ```
