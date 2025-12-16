@@ -1,6 +1,6 @@
 {
-  "name": "magi-3d",
-  "version": "1.0.0",
+  "name": "@funmagic-ai/magi-3d-sdk",
+  "version": "0.1.0",
   "description": "A universal TypeScript SDK for 3D generative AI providers.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
