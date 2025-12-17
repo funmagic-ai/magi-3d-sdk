@@ -53,7 +53,7 @@
     "sdk",
     "typescript"
   ],
-  "author": "magify pte ltd (funmagic.ai)",
+  "author": "funmagic.ai(magify@funmagic.ai)",
   "license": "MIT",
   "packageManager": "pnpm@10.14.0",
   "devDependencies": {
