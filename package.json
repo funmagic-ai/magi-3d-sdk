@@ -1,6 +1,6 @@
 {
   "name": "magi-3d",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A universal TypeScript SDK for 3D generative AI providers.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
