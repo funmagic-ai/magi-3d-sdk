@@ -72,5 +72,13 @@
   "dependencies": {
     "axios": "^1.13.2",
     "eventemitter3": "^5.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/funmagic-ai/magi-3d-sdk.git"
+  },
+  "homepage": "https://github.com/funmagic-ai/magi-3d-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/funmagic-ai/magi-3d-sdk/issues"
   }
 }
