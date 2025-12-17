@@ -22,7 +22,7 @@ yarn add magi-3d
 
 ## Architecture
 
-The SDK follows a similar pattern to Vercel AI SDK:
+The SDK follows a simple pattern:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -273,11 +273,11 @@ All operations use a single `createTask()` method. The `type` field determines t
 
 | Parameter | Type | Default | Versions | Description |
 |-----------|------|---------|----------|-------------|
-| `model_version` | string | latest | All | Model version |
+| `model_version` | string | v2.5-20250123 | All | Model version |
 | `pbr` | boolean | true | All | Enable PBR materials |
 | `texture` | boolean | true | All | Enable texturing |
 | `texture_quality` | `'standard'` \| `'detailed'` | standard | All | Texture resolution |
-| `texture_alignment` | `'original_image'` \| `'geometry'` | - | v2.0+ | Texture alignment |
+| `texture_alignment` | `'original_image'` \| `'geometry'` | original_image| v2.0+ | Texture alignment |
 | `texture_seed` | number | random | v2.0+ | Reproducible textures |
 | `face_limit` | number | - | All | Max face count |
 | `quad` | boolean | false | v2.0+ | Quad mesh (forces FBX) |
@@ -539,7 +539,7 @@ When polling returns `status: failed/banned/expired/cancelled`, the SDK reads `e
 
 ### Hunyuan Error Handling
 
-Hunyuan uses Tencent Cloud 公共错误码 (Common Error Codes):
+Hunyuan uses Tencent Cloud Common Error Codes:
 
 | Hunyuan Code | SDK Error Code | Type |
 |--------------|----------------|------|
