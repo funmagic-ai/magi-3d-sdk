@@ -38,7 +38,7 @@ export { HunyuanProvider } from '../providers/HunyuanProvider';
 // Core
 export { AbstractProvider } from '../core/AbstractProvider';
 export type { ImageInput } from '../core/AbstractProvider';
-export { Magi3DClient } from '../core/Magi3DClient';
+export { Magi3DClient, TaskError, ApiError } from '../core/Magi3DClient';
 export type { PollOptions } from '../core/Magi3DClient';
 
 // Utilities

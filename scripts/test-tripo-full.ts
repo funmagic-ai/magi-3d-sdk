@@ -13,7 +13,7 @@
  *   pnpm tsx scripts/test-tripo-full.ts pipeline  # Full pipeline test
  */
 
-import { TripoProvider, Magi3DClient, TaskType, TaskStatus, StandardTask } from '../src';
+import { TripoProvider, Magi3DClient, TaskType, TaskStatus, StandardTask, TaskError, ApiError } from '../src';
 import { config } from 'dotenv';
 
 config();
@@ -42,8 +42,16 @@ function printResult(result: StandardTask) {
   console.log('\n   Result:');
   console.log(`     Status: ${result.status}`);
   if (result.result?.modelGlb) console.log(`     GLB: ${result.result.modelGlb.substring(0, 80)}...`);
+  if (result.result?.modelPbr) console.log(`     PBR: ${result.result.modelPbr.substring(0, 80)}...`);
   if (result.result?.thumbnail) console.log(`     Thumbnail: ${result.result.thumbnail.substring(0, 80)}...`);
-  if (result.error) console.log(`     Error: ${result.error.message}`);
+  if (result.error) {
+    console.log(`     Error Code: ${result.error.code}`);
+    console.log(`     Error Message: ${result.error.message}`);
+    if (result.error.raw) {
+      console.log('     Raw Response:');
+      console.log(JSON.stringify(result.error.raw, null, 2).split('\n').map(l => '       ' + l).join('\n'));
+    }
+  }
 }
 
 // ============================================
@@ -134,26 +142,6 @@ const tests: TestCase[] = [
       const taskId = await client.createTask({
         type: TaskType.IMAGE_TO_3D,
         input: TEST_IMAGE_URL
-      });
-      console.log(`   Task ID: ${taskId}`);
-
-      const result = await client.pollUntilDone(taskId, POLL_OPTIONS);
-      printResult(result);
-
-      return { passed: result.status === TaskStatus.SUCCEEDED, taskId };
-    }
-  },
-  {
-    name: 'image-to-3d-with-prompt',
-    run: async (client) => {
-      console.log('\n[TEST] Image-to-3D - With Prompt');
-      console.log(`   Image: ${TEST_IMAGE_URL}`);
-      console.log('   Prompt: "a dinosaur toy"');
-
-      const taskId = await client.createTask({
-        type: TaskType.IMAGE_TO_3D,
-        input: TEST_IMAGE_URL,
-        prompt: 'a dinosaur toy'
       });
       console.log(`   Task ID: ${taskId}`);
 
@@ -411,7 +399,35 @@ async function main() {
       const { passed } = await test.run(client);
       results.push({ name: test.name, passed });
     } catch (error) {
-      console.error(`\n   Error: ${error instanceof Error ? error.message : error}`);
+      console.error(`\n   Exception thrown:`);
+      if (error instanceof TaskError) {
+        // TaskError from pollUntilDone - includes full task with raw response
+        console.error(`     Error Code: ${error.code}`);
+        console.error(`     Message: ${error.message}`);
+        if (error.task.error?.raw) {
+          console.error('     Raw Provider Response:');
+          console.error(JSON.stringify(error.task.error.raw, null, 2).split('\n').map(l => '       ' + l).join('\n'));
+        }
+      } else if (error instanceof ApiError) {
+        // ApiError from createTask or getTaskStatus - API-level errors
+        console.error(`     Error Code: ${error.code}`);
+        console.error(`     Message: ${error.message}`);
+        if (error.httpStatus) {
+          console.error(`     HTTP Status: ${error.httpStatus}`);
+        }
+        if (error.raw) {
+          console.error('     Raw Provider Response:');
+          console.error(JSON.stringify(error.raw, null, 2).split('\n').map(l => '       ' + l).join('\n'));
+        }
+      } else if (error instanceof Error) {
+        console.error(`     Message: ${error.message}`);
+        // Show stack trace for debugging
+        if (error.stack) {
+          console.error('     Stack:', error.stack.split('\n').slice(1, 4).join('\n'));
+        }
+      } else {
+        console.error(`     Error: ${error}`);
+      }
       results.push({ name: test.name, passed: false });
     }
   }

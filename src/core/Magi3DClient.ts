@@ -8,6 +8,78 @@ import { TaskParams, StandardTask, TaskStatus } from '../types';
 import { EventEmitter } from 'eventemitter3';
 
 /**
+ * Custom error class for API-level errors (HTTP errors, validation errors, etc.).
+ *
+ * @remarks
+ * This error is thrown when an API request fails (not task execution).
+ * It includes the raw provider response for debugging.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await client.createTask(params);
+ * } catch (error) {
+ *   if (error instanceof ApiError) {
+ *     console.log('Error code:', error.code);
+ *     console.log('Raw response:', error.raw);
+ *   }
+ * }
+ * ```
+ */
+export class ApiError extends Error {
+  /** The SDK error code (e.g., 'RATE_LIMIT_EXCEEDED') */
+  readonly code: string;
+  /** HTTP status code (if available) */
+  readonly httpStatus?: number;
+  /** Raw provider response for debugging */
+  readonly raw: unknown;
+
+  constructor(message: string, code: string, raw?: unknown, httpStatus?: number) {
+    super(`${message} (code: ${code})`);
+    this.name = 'ApiError';
+    this.code = code;
+    this.raw = raw;
+    this.httpStatus = httpStatus;
+  }
+}
+
+/**
+ * Custom error class for task failures that includes the full StandardTask object.
+ *
+ * @remarks
+ * This error is thrown when a task fails during polling. It includes:
+ * - The error message and code
+ * - The full StandardTask object with `error.raw` containing the provider response
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await client.pollUntilDone(taskId);
+ * } catch (error) {
+ *   if (error instanceof TaskError) {
+ *     console.log('Error code:', error.code);
+ *     console.log('Raw response:', error.task.error?.raw);
+ *   }
+ * }
+ * ```
+ */
+export class TaskError extends Error {
+  /** The SDK error code (e.g., 'CONTENT_POLICY_VIOLATION') */
+  readonly code: string;
+  /** The full StandardTask object containing error details */
+  readonly task: StandardTask;
+
+  constructor(task: StandardTask) {
+    const message = task.error?.message || 'Task failed';
+    const code = task.error?.code || 'UNKNOWN';
+    super(`${message} (code: ${code})`);
+    this.name = 'TaskError';
+    this.code = code;
+    this.task = task;
+  }
+}
+
+/**
  * Configuration options for polling task status.
  *
  * @example
@@ -286,13 +358,8 @@ export class Magi3DClient extends EventEmitter {
             return resolve(task);
           }
 
-          if (task.status === TaskStatus.FAILED) {
-            const errorMsg = task.error?.message || 'Task failed';
-            return reject(new Error(`${errorMsg} (code: ${task.error?.code || 'UNKNOWN'})`));
-          }
-
-          if (task.status === TaskStatus.CANCELED) {
-            return reject(new Error('Task was cancelled'));
+          if (task.status === TaskStatus.FAILED || task.status === TaskStatus.CANCELED) {
+            return reject(new TaskError(task));
           }
 
           // Continue polling

@@ -5,6 +5,7 @@
 
 import axios, { AxiosInstance } from 'axios';
 import { AbstractProvider, ImageInput } from '../core/AbstractProvider';
+import { ApiError } from '../core/Magi3DClient';
 import { InputUtils } from '../utils/InputUtils';
 import {
   TaskParams,
@@ -51,7 +52,10 @@ interface TripoTaskData {
   type: string;
   progress?: number;
   create_time?: number;
+  // Error code present when status is failed/banned/expired/cancelled/unknown
+  error_code?: number;
   output?: {
+    // Success fields
     model?: string;
     pbr_model?: string;
     base_model?: string;
@@ -59,6 +63,30 @@ interface TripoTaskData {
     generated_video?: string;
   };
 }
+
+/**
+ * Tripo error code ranges:
+ * - 1000-1999: Request errors (HTTP 400-499, except 1000/1001 which are HTTP 500)
+ * - 2000-2999: Task generation errors (HTTP 400-499)
+ * @internal
+ */
+const TRIPO_ERROR_CODE_MAP: Record<number, string> = {
+  // 1xxx - Request/Server errors
+  1000: 'SERVER_ERROR',
+  1001: 'FATAL_SERVER_ERROR',
+  // 2xxx - Task generation errors
+  2000: 'RATE_LIMIT_EXCEEDED',
+  2001: 'TASK_NOT_FOUND',
+  2002: 'UNSUPPORTED_TASK_TYPE',
+  2003: 'INPUT_FILE_EMPTY',
+  2004: 'UNSUPPORTED_FILE_TYPE',
+  2006: 'INVALID_ORIGINAL_TASK',
+  2007: 'ORIGINAL_TASK_NOT_SUCCESS',
+  2008: 'CONTENT_POLICY_VIOLATION',
+  2010: 'INSUFFICIENT_CREDITS',
+  2015: 'DEPRECATED_VERSION',
+  2018: 'MODEL_TOO_COMPLEX'
+};
 
 // ============================================
 // Provider Implementation
@@ -211,23 +239,54 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
    * @param params - Task parameters
    * @returns Task ID from Tripo
    *
-   * @throws Error if API request fails
+   * @throws Error if API request fails (HTTP 4xx/5xx or code !== 0)
    */
   protected async doCreateTask(params: TaskParams<TripoOptions>): Promise<string> {
     const payload = this.buildPayload(params);
 
-    const response = await this.client.post<TripoApiResponse<{ task_id: string }>>(
-      '/v2/openapi/task',
-      payload
-    );
-
-    if (response.data.code !== 0) {
-      throw new Error(
-        `Tripo API error (code ${response.data.code}): ${response.data.message || 'Unknown error'}`
+    try {
+      const response = await this.client.post<TripoApiResponse<{ task_id: string }>>(
+        '/v2/openapi/task',
+        payload
       );
-    }
 
-    return response.data.data.task_id;
+      if (response.data.code !== 0) {
+        throw this.createTripoError(response.data.code, response.data.message, response.data);
+      }
+
+      return response.data.data.task_id;
+    } catch (error) {
+      // Handle axios HTTP errors (4xx/5xx)
+      if (axios.isAxiosError(error) && error.response?.data) {
+        const tripoCode = error.response.data.code;
+        const tripoMessage = error.response.data.message;
+        throw this.createTripoError(tripoCode, tripoMessage, error.response.data, error.response.status);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Creates a standardized error from Tripo error response.
+   *
+   * @param tripoCode - Tripo error code (1xxx or 2xxx)
+   * @param message - Error message from Tripo
+   * @param raw - Raw response data for debugging
+   * @param httpStatus - HTTP status code (optional)
+   * @returns ApiError with formatted message and raw response
+   *
+   * @internal
+   */
+  private createTripoError(tripoCode: number, message?: string, raw?: unknown, httpStatus?: number): ApiError {
+    const sdkCode = TRIPO_ERROR_CODE_MAP[tripoCode] || `TRIPO_ERROR_${tripoCode}`;
+    const errorType = tripoCode >= 2000 ? 'Task error' : 'Request error';
+    const httpInfo = httpStatus ? ` [HTTP ${httpStatus}]` : '';
+    return new ApiError(
+      `${errorType}${httpInfo}: ${message || 'Unknown error'}`,
+      sdkCode,
+      raw,
+      httpStatus
+    );
   }
 
   /**
@@ -249,7 +308,7 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
       };
     }
 
-    // Image-to-3D
+    // Image-to-3D (Tripo does not support prompt for image_to_model)
     if (isImageTo3DParams(params)) {
       return {
         type: 'image_to_model',
@@ -257,20 +316,18 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
           type: 'jpg',
           url: params.input
         },
-        ...(params.prompt && { prompt: params.prompt }),
         ...options
       };
     }
 
-    // Multi-view to 3D
+    // Multi-view to 3D (Tripo does not support prompt for multiview_to_model)
     if (isMultiviewTo3DParams(params)) {
       return {
         type: 'multiview_to_model',
-        files: params.inputs.map((url, index) => ({
+        files: params.inputs.map((url) => ({
           type: 'jpg',
           url: url || undefined
         })).filter(f => f.url),
-        ...(params.prompt && { prompt: params.prompt }),
         ...options
       };
     }
@@ -380,24 +437,66 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
    * @param taskId - The Tripo task ID
    * @returns Normalized StandardTask object
    *
-   * @throws Error if API request fails
+   * @throws Error if HTTP request fails (4xx/5xx)
    */
   async getTaskStatus(taskId: string): Promise<StandardTask> {
-    const response = await this.client.get<TripoApiResponse<TripoTaskData>>(
-      `/v2/openapi/task/${taskId}`
-    );
-
-    if (response.data.code !== 0) {
-      throw new Error(
-        `Failed to get task status (code ${response.data.code}): ${response.data.message || 'Unknown error'}`
+    try {
+      const response = await this.client.get<TripoApiResponse<TripoTaskData>>(
+        `/v2/openapi/task/${taskId}`
       );
-    }
 
-    return this.normalizeTripoResponse(response.data.data);
+      // HTTP 200 + code !== 0: API-level error (shouldn't happen for polling, but handle it)
+      if (response.data.code !== 0) {
+        return this.normalizeErrorResponse(taskId, response.data.code, response.data.message);
+      }
+
+      // HTTP 200 + code === 0: Normal response, check status field
+      return this.normalizeTripoResponse(response.data.data);
+    } catch (error) {
+      // Handle axios HTTP errors (4xx/5xx) - these are request errors, throw them
+      if (axios.isAxiosError(error) && error.response?.data) {
+        const tripoCode = error.response.data.code;
+        const tripoMessage = error.response.data.message;
+        throw this.createTripoError(tripoCode, tripoMessage, error.response.data, error.response.status);
+      }
+      throw error;
+    }
   }
 
   /**
-   * Normalizes Tripo API response to SDK StandardTask format.
+   * Normalizes a Tripo error response (code !== 0) to StandardTask format.
+   *
+   * @param taskId - The task ID
+   * @param tripoCode - Tripo error code (1xxx or 2xxx)
+   * @param message - Tripo error message
+   * @returns StandardTask with FAILED status
+   *
+   * @internal
+   */
+  private normalizeErrorResponse(taskId: string, tripoCode: number, message?: string): StandardTask {
+    const sdkErrorCode = TRIPO_ERROR_CODE_MAP[tripoCode] || `TRIPO_ERROR_${tripoCode}`;
+
+    return {
+      id: taskId,
+      provider: ProviderId.TRIPO,
+      type: TaskType.TEXT_TO_3D, // Unknown at this point
+      status: TaskStatus.FAILED,
+      progress: 0,
+      error: {
+        code: sdkErrorCode,
+        message: message || 'Task failed',
+        raw: { tripoCode, message }
+      },
+      createdAt: Date.now()
+    };
+  }
+
+  /**
+   * Normalizes Tripo API response (code === 0) to SDK StandardTask format.
+   *
+   * @remarks
+   * This method is called when the Tripo API returns code === 0.
+   * Task failures (code !== 0) are handled by normalizeErrorResponse.
    *
    * @param data - Raw Tripo task data
    * @returns Normalized StandardTask
@@ -406,6 +505,8 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
    */
   private normalizeTripoResponse(data: TripoTaskData): StandardTask {
     // Map Tripo status strings to SDK TaskStatus enum
+    // Note: 'failed', 'banned', 'expired' should come with code !== 0
+    // and be handled by normalizeErrorResponse, but kept here as fallback
     const statusMap: Record<string, TaskStatus> = {
       'queued': TaskStatus.PENDING,
       'running': TaskStatus.PROCESSING,
@@ -436,24 +537,58 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
     const sdkType = taskTypeMap[data.type] || TaskType.IMAGE_TO_3D;
 
     // Build result artifacts if task succeeded
+    // Output priority for modelGlb: pbr_model > model > base_model
+    // - pbr_model: Available when pbr=true (best quality with PBR materials)
+    // - model: Standard textured model (when pbr=false, texture=true)
+    // - base_model: Base geometry without texture (when texture=false)
     let result: TaskArtifacts | undefined;
     if (data.status === 'success' && data.output) {
+      const { model, pbr_model, base_model, rendered_image, generated_video } = data.output;
+
+      // Determine the primary GLB model URL
+      const modelGlb = pbr_model || model || base_model || '';
+
       result = {
-        modelGlb: data.output.model || data.output.pbr_model || '',
-        thumbnail: data.output.rendered_image,
-        modelObj: data.output.base_model?.endsWith('.obj') ? data.output.base_model : undefined,
-        video: data.output.generated_video
+        modelGlb,
+        modelPbr: pbr_model,
+        modelBase: base_model,
+        thumbnail: rendered_image,
+        video: generated_video
       };
     }
 
-    // Build error object if task failed
+    // Build error object if task status indicates failure
+    // For HTTP 200 + code 0 + failure status, read error_code from task data
     let error: StandardTask['error'];
-    if (sdkStatus === TaskStatus.FAILED) {
+    if (sdkStatus === TaskStatus.FAILED || sdkStatus === TaskStatus.CANCELED) {
+      // Map error_code if present, otherwise use status-based codes
+      let sdkErrorCode: string;
+      if (data.error_code !== undefined) {
+        sdkErrorCode = TRIPO_ERROR_CODE_MAP[data.error_code] || `TRIPO_ERROR_${data.error_code}`;
+      } else {
+        // Fallback based on status string
+        const statusCodeMap: Record<string, string> = {
+          'failed': 'GENERATION_FAILED',
+          'banned': 'CONTENT_POLICY_VIOLATION',
+          'expired': 'TASK_EXPIRED',
+          'cancelled': 'TASK_CANCELED',
+          'unknown': 'UNKNOWN_ERROR'
+        };
+        sdkErrorCode = statusCodeMap[data.status] || 'GENERATION_FAILED';
+      }
+
+      // Default messages based on status
+      const statusMessageMap: Record<string, string> = {
+        'failed': 'Model generation failed',
+        'banned': 'Task rejected due to content policy violation',
+        'expired': 'Task expired after timeout period',
+        'cancelled': 'Task was cancelled',
+        'unknown': 'Task status is unknown'
+      };
+
       error = {
-        code: data.status === 'banned' ? 'CONTENT_POLICY_VIOLATION' : 'GENERATION_FAILED',
-        message: data.status === 'banned'
-          ? 'Task rejected due to content policy violation'
-          : 'Model generation failed',
+        code: sdkErrorCode,
+        message: statusMessageMap[data.status] || 'Task failed',
         raw: data
       };
     }

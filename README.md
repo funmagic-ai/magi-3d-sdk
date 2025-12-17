@@ -238,10 +238,12 @@ All operations use a single `createTask()` method. The `type` field determines t
 | `MULTIVIEW_TO_3D` | Generate from multiple views | `inputs` (array of URLs) |
 | `RIG` | Add skeletal rigging | `taskId`, `skeleton` |
 | `ANIMATE` | Apply animation | `taskId`, `animation` |
-| `TEXTURE` | Re-texture model | `taskId`, `prompt` |
+| `TEXTURE` | Re-texture model | `taskId`, optional `prompt` |
 | `REFINE` | Improve quality | `taskId` |
 | `DECIMATE` | Reduce polygons | `taskId`, `targetFaceCount` |
 | `CONVERT` | Format conversion | `taskId`, `format` |
+
+> **Note:** `IMAGE_TO_3D` and `MULTIVIEW_TO_3D` do not support text prompts. Use `TEXT_TO_3D` if you need prompt-based generation.
 
 ## Task Status
 
@@ -452,17 +454,162 @@ createTask({
 });
 ```
 
+## Error Handling
+
+The SDK provides two custom error classes for different error scenarios:
+
+### Error Classes
+
+```typescript
+import { TaskError, ApiError } from 'magi-3d/server';
+
+// TaskError - Thrown when a task fails during polling
+// Contains the full StandardTask with error details
+try {
+  const result = await client.pollUntilDone(taskId);
+} catch (error) {
+  if (error instanceof TaskError) {
+    console.log('Error code:', error.code);           // e.g., 'CONTENT_POLICY_VIOLATION'
+    console.log('Task:', error.task);                 // Full StandardTask object
+    console.log('Raw response:', error.task.error?.raw);  // Provider's raw response
+  }
+}
+
+// ApiError - Thrown when API request fails (auth, validation, network)
+// Contains code, httpStatus, and raw provider response
+try {
+  const taskId = await client.createTask(params);
+} catch (error) {
+  if (error instanceof ApiError) {
+    console.log('Error code:', error.code);      // e.g., 'RATE_LIMIT_EXCEEDED'
+    console.log('HTTP status:', error.httpStatus);  // e.g., 429
+    console.log('Raw response:', error.raw);     // Provider's raw response
+  }
+}
+```
+
+### StandardTask.error Structure
+
+```typescript
+// When task.status === FAILED or CANCELED
+{
+  code: string;      // e.g., 'CONTENT_POLICY_VIOLATION', 'RATE_LIMIT_EXCEEDED'
+  message: string;   // Human-readable error message
+  raw: unknown;      // Original provider response for debugging
+}
+```
+
+### Tripo Error Handling
+
+Tripo errors are identified by HTTP status code + Tripo error code:
+
+| Range | HTTP Status | Type |
+|-------|-------------|------|
+| 1000-1999 | 400-499 (1000/1001: 500) | Request errors |
+| 2000-2999 | 400-499 | Task generation errors |
+
+#### Tripo Error Codes
+
+| Tripo Code | SDK Error Code | HTTP | Description |
+|------------|----------------|------|-------------|
+| 1000 | SERVER_ERROR | 500 | Server error |
+| 1001 | FATAL_SERVER_ERROR | 500 | Fatal server error |
+| 2000 | RATE_LIMIT_EXCEEDED | 429 | Rate limit hit |
+| 2001 | TASK_NOT_FOUND | 404 | Invalid task ID |
+| 2002 | UNSUPPORTED_TASK_TYPE | 400 | Invalid task type |
+| 2003 | INPUT_FILE_EMPTY | 400 | No input file |
+| 2004 | UNSUPPORTED_FILE_TYPE | 400 | Bad file format |
+| 2006 | INVALID_ORIGINAL_TASK | 400 | Bad original task |
+| 2007 | ORIGINAL_TASK_NOT_SUCCESS | 400 | Original task not done |
+| 2008 | CONTENT_POLICY_VIOLATION | 400 | Content banned |
+| 2010 | INSUFFICIENT_CREDITS | 403 | No credits |
+| 2015 | DEPRECATED_VERSION | 400 | Version deprecated |
+| 2018 | MODEL_TOO_COMPLEX | 400 | Cannot remesh |
+
+#### Task Status Error Codes
+
+When polling returns `status: failed/banned/expired/cancelled`, the SDK reads `error_code` from response:
+
+| Status | Fallback SDK Code | Message |
+|--------|-------------------|---------|
+| failed | GENERATION_FAILED | Model generation failed |
+| banned | CONTENT_POLICY_VIOLATION | Content policy violation |
+| expired | TASK_EXPIRED | Task expired |
+| cancelled | TASK_CANCELED | Task was cancelled |
+
+### Hunyuan Error Handling
+
+Hunyuan uses Tencent Cloud 公共错误码 (Common Error Codes):
+
+| Hunyuan Code | SDK Error Code | Type |
+|--------------|----------------|------|
+| AuthFailure.SignatureExpire | SIGNATURE_EXPIRED | Auth |
+| AuthFailure.SignatureFailure | SIGNATURE_FAILURE | Auth |
+| AuthFailure.SecretIdNotFound | SECRET_ID_NOT_FOUND | Auth |
+| InvalidParameter | INVALID_PARAMETER | Param |
+| MissingParameter | MISSING_PARAMETER | Param |
+| RequestLimitExceeded | RATE_LIMIT_EXCEEDED | Rate |
+| ResourceNotFound | RESOURCE_NOT_FOUND | Resource |
+| InternalError | INTERNAL_ERROR | Service |
+| ServiceUnavailable | SERVICE_UNAVAILABLE | Service |
+
+### Usage Example
+
+```typescript
+import { TaskError, ApiError, TaskStatus } from 'magi-3d/server';
+
+// Server-side with proper error handling
+try {
+  const taskId = await client.createTask(params);
+  const result = await client.pollUntilDone(taskId);
+  console.log('Model URL:', result.result?.modelGlb);
+} catch (error) {
+  if (error instanceof TaskError) {
+    // Task failed during generation
+    console.log('Task failed:', error.code);
+    console.log('Raw response:', error.task.error?.raw);
+  } else if (error instanceof ApiError) {
+    // API request failed (auth, validation, etc.)
+    console.log('API error:', error.code, error.httpStatus);
+    console.log('Raw response:', error.raw);
+  }
+}
+
+// React hooks
+const { task, error } = useCreateTask({ api: '/api/3d' });
+
+if (task?.error) {
+  switch (task.error.code) {
+    case 'CONTENT_POLICY_VIOLATION':
+      showAlert('Content was flagged. Please modify and retry.');
+      break;
+    case 'INSUFFICIENT_CREDITS':
+      showAlert('Please purchase more credits.');
+      break;
+    default:
+      showAlert(task.error.message);
+  }
+}
+```
+
+---
+
 ## TypeScript Support
 
 Full TypeScript support with detailed type definitions:
 
 ```typescript
-import type {
-  TaskParams,
-  StandardTask,
-  TaskArtifacts,
-  TripoOptions,
-  HunyuanOptions
+import {
+  // Error classes
+  TaskError,         // Thrown when task fails during polling
+  ApiError,          // Thrown when API request fails
+
+  // Types
+  type TaskParams,
+  type StandardTask,
+  type TaskArtifacts,
+  type TripoOptions,
+  type HunyuanOptions
 } from 'magi-3d/server';
 
 import type {

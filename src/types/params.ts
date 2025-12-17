@@ -124,8 +124,6 @@ export interface ImageTo3DParams<T = unknown> extends BaseTaskParams<T> {
   type: TaskType.IMAGE_TO_3D;
   /** Image URL (must be publicly accessible) */
   input: RemoteUrl;
-  /** Optional prompt to guide generation */
-  prompt?: string;
 }
 
 /**
@@ -135,8 +133,6 @@ export interface MultiviewTo3DParams<T = unknown> extends BaseTaskParams<T> {
   type: TaskType.MULTIVIEW_TO_3D;
   /** Array of image URLs [front, left, back, right] */
   inputs: RemoteUrl[];
-  /** Optional prompt to guide generation */
-  prompt?: string;
 }
 
 // ============================================

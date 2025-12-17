@@ -9,8 +9,13 @@ import { TaskStatus, TaskType, ProviderId, RemoteUrl } from './enums';
  * Standard output artifacts from a 3D generation task
  */
 export interface TaskArtifacts {
-  /** GLB model URL (web standard format, always present on success) */
+  /** Primary GLB model URL (best available: pbr > standard > base) */
   modelGlb: RemoteUrl;
+
+  /** PBR model URL (with PBR materials, available when pbr=true) */
+  modelPbr?: RemoteUrl;
+  /** Base model URL (geometry without texture, available when texture=false) */
+  modelBase?: RemoteUrl;
 
   /** USDZ model URL (for iOS/AR) */
   modelUsdz?: RemoteUrl;

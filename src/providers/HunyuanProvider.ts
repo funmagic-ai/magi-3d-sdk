@@ -5,6 +5,7 @@
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { AbstractProvider, ImageInput } from '../core/AbstractProvider';
+import { ApiError } from '../core/Magi3DClient';
 import {
   TaskParams,
   StandardTask,
@@ -24,6 +25,82 @@ import {
 } from '../types';
 import { TencentCloudSigner } from '../utils/TencentCloudSigner';
 import { InputUtils } from '../utils/InputUtils';
+
+// ============================================
+// Hunyuan Error Code Mapping
+// ============================================
+
+/**
+ * Hunyuan 公共错误码 (Common Error Codes) mapping to SDK error codes
+ * @see https://cloud.tencent.com/document/product/xxx/error-codes
+ * @internal
+ */
+const HUNYUAN_ERROR_CODE_MAP: Record<string, string> = {
+  // Authentication errors
+  'AuthFailure.InvalidAuthorization': 'INVALID_AUTHORIZATION',
+  'AuthFailure.InvalidSecretId': 'INVALID_SECRET_ID',
+  'AuthFailure.SecretIdNotFound': 'SECRET_ID_NOT_FOUND',
+  'AuthFailure.SignatureExpire': 'SIGNATURE_EXPIRED',
+  'AuthFailure.SignatureFailure': 'SIGNATURE_FAILURE',
+  'AuthFailure.TokenFailure': 'TOKEN_FAILURE',
+  'AuthFailure.MFAFailure': 'MFA_FAILURE',
+  'AuthFailure.UnauthorizedOperation': 'UNAUTHORIZED_OPERATION',
+  // Parameter errors
+  'InvalidParameter': 'INVALID_PARAMETER',
+  'InvalidParameterValue': 'INVALID_PARAMETER_VALUE',
+  'MissingParameter': 'MISSING_PARAMETER',
+  'UnknownParameter': 'UNKNOWN_PARAMETER',
+  // Rate limit errors
+  'RequestLimitExceeded': 'RATE_LIMIT_EXCEEDED',
+  'RequestLimitExceeded.IPLimitExceeded': 'IP_RATE_LIMIT_EXCEEDED',
+  'RequestLimitExceeded.UinLimitExceeded': 'ACCOUNT_RATE_LIMIT_EXCEEDED',
+  // Resource errors
+  'ResourceNotFound': 'RESOURCE_NOT_FOUND',
+  'ResourceInUse': 'RESOURCE_IN_USE',
+  'ResourceInsufficient': 'RESOURCE_INSUFFICIENT',
+  'ResourceUnavailable': 'RESOURCE_UNAVAILABLE',
+  // Operation errors
+  'FailedOperation': 'OPERATION_FAILED',
+  'InvalidAction': 'INVALID_ACTION',
+  'UnsupportedOperation': 'UNSUPPORTED_OPERATION',
+  'UnauthorizedOperation': 'UNAUTHORIZED_OPERATION',
+  // Service errors
+  'InternalError': 'INTERNAL_ERROR',
+  'ServiceUnavailable': 'SERVICE_UNAVAILABLE',
+  'ActionOffline': 'ACTION_OFFLINE',
+  // Request errors
+  'InvalidRequest': 'INVALID_REQUEST',
+  'RequestSizeLimitExceeded': 'REQUEST_SIZE_EXCEEDED',
+  'ResponseSizeLimitExceeded': 'RESPONSE_SIZE_EXCEEDED',
+  'UnsupportedProtocol': 'UNSUPPORTED_PROTOCOL',
+  'UnsupportedRegion': 'UNSUPPORTED_REGION',
+  // IP restrictions
+  'IpInBlacklist': 'IP_BLACKLISTED',
+  'IpNotInWhitelist': 'IP_NOT_WHITELISTED',
+  // Other
+  'LimitExceeded': 'LIMIT_EXCEEDED',
+  'NoSuchProduct': 'NO_SUCH_PRODUCT',
+  'NoSuchVersion': 'NO_SUCH_VERSION',
+  'DryRunOperation': 'DRY_RUN_OPERATION'
+};
+
+/**
+ * Maps Hunyuan error code to SDK error code
+ * @internal
+ */
+function mapHunyuanErrorCode(hunyuanCode: string): string {
+  // Try exact match first
+  if (HUNYUAN_ERROR_CODE_MAP[hunyuanCode]) {
+    return HUNYUAN_ERROR_CODE_MAP[hunyuanCode];
+  }
+  // Try prefix match (e.g., AuthFailure.* → check AuthFailure)
+  const prefix = hunyuanCode.split('.')[0];
+  if (HUNYUAN_ERROR_CODE_MAP[prefix]) {
+    return HUNYUAN_ERROR_CODE_MAP[prefix];
+  }
+  // Return original code as fallback
+  return hunyuanCode;
+}
 
 // ============================================
 // Hunyuan API Types (Internal)
@@ -221,10 +298,13 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     const response: AxiosResponse<HunyuanApiResponse> = await this.client.post('/', payloadStr, { headers });
     const apiResponse = response.data.Response;
 
-    // Check for API error
+    // Check for API error (公共错误码)
     if (apiResponse.Error) {
-      throw new Error(
-        `Hunyuan API error (${apiResponse.Error.Code}): ${apiResponse.Error.Message}`
+      const sdkCode = mapHunyuanErrorCode(apiResponse.Error.Code);
+      throw new ApiError(
+        `Hunyuan API error: ${apiResponse.Error.Message}`,
+        sdkCode,
+        response.data  // Include full raw response
       );
     }
 
@@ -269,7 +349,7 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
       };
     }
 
-    // Image-to-3D
+    // Image-to-3D (Hunyuan does not support prompt for image-to-3D)
     if (isImageTo3DParams(params)) {
       // Detect input type and use appropriate field
       const isUrl = InputUtils.isUrl(params.input);
@@ -277,7 +357,6 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
         ...(isUrl
           ? { ImageUrl: params.input }
           : { ImageBase64: InputUtils.extractBase64(params.input) }),
-        ...(params.prompt && { Prompt: params.prompt }),
         ...this.mapProviderOptions(options)
       };
     }
@@ -400,9 +479,13 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     const response: AxiosResponse<HunyuanApiResponse> = await this.client.post('/', payload, { headers });
     const apiResponse = response.data.Response;
 
+    // Check for API error (公共错误码)
     if (apiResponse.Error) {
-      throw new Error(
-        `Hunyuan API error (${apiResponse.Error.Code}): ${apiResponse.Error.Message}`
+      const sdkCode = mapHunyuanErrorCode(apiResponse.Error.Code);
+      throw new ApiError(
+        `Hunyuan API error: ${apiResponse.Error.Message}`,
+        sdkCode,
+        response.data  // Include full raw response
       );
     }
 
@@ -461,10 +544,14 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     }
 
     // Build error object if task failed
+    // ErrorCode comes from Hunyuan when Status === 'FAIL'
     let error: StandardTask['error'];
     if (sdkStatus === TaskStatus.FAILED) {
+      const sdkCode = data.ErrorCode
+        ? mapHunyuanErrorCode(data.ErrorCode)
+        : 'GENERATION_FAILED';
       error = {
-        code: data.ErrorCode || 'GENERATION_FAILED',
+        code: sdkCode,
         message: data.ErrorMessage || 'Model generation failed',
         raw: data
       };
