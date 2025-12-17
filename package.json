@@ -42,7 +42,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "docs": "typedoc src/index.ts",
+    "docs": "typedoc",
     "prepublishOnly": "pnpm run build && pnpm run test",
     "test:tripo": "tsx scripts/test-tripo-full.ts",
     "test:hunyuan": "tsx scripts/test-hunyuan-full.ts"

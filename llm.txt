@@ -1,0 +1,609 @@
+# Magi 3D SDK - LLM Context File
+
+> Universal TypeScript SDK for 3D generative AI providers. Generate 3D models from text or images using a unified API.
+
+This file serves two audiences:
+- **SDK Users**: Developers integrating Magi 3D into their applications
+- **SDK Contributors**: Developers contributing to the SDK itself
+
+---
+
+# PART 1: FOR SDK USERS
+
+## Quick Start
+
+```typescript
+import { Magi3DClient, TripoProvider, TaskType } from 'magi-3d/server';
+
+const provider = new TripoProvider({ apiKey: 'your-api-key' });
+const client = new Magi3DClient(provider);
+
+// Generate 3D model from text
+const taskId = await client.createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a cute cat'
+});
+
+// Wait for completion
+const result = await client.pollUntilDone(taskId);
+console.log('Model URL:', result.result?.modelGlb);
+```
+
+## Installation
+
+```bash
+npm install magi-3d
+# or
+pnpm add magi-3d
+```
+
+## Entry Points
+
+```
+magi-3d           → Main exports (types, enums)
+magi-3d/server    → Server-side (providers, client) - USE THIS FOR BACKEND
+magi-3d/react     → React hooks (useCreateTask, useTaskStatus) - USE THIS FOR FRONTEND
+```
+
+## Provider Setup
+
+### Tripo
+
+```typescript
+import { TripoProvider } from 'magi-3d/server';
+
+const provider = new TripoProvider({
+  apiKey: process.env.TRIPO_API_KEY!
+});
+```
+
+### Hunyuan (Tencent Cloud)
+
+```typescript
+import { HunyuanProvider } from 'magi-3d/server';
+
+const provider = new HunyuanProvider({
+  secretId: process.env.TENCENT_SECRET_ID!,
+  secretKey: process.env.TENCENT_SECRET_KEY!,
+  region: 'ap-guangzhou'  // or 'ap-shanghai', 'ap-beijing', etc.
+});
+```
+
+## Common Use Cases
+
+### 1. Text-to-3D Generation
+
+```typescript
+const taskId = await client.createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a medieval castle with towers',
+  providerOptions: {
+    pbr: true,
+    texture_quality: 'detailed'
+  }
+});
+```
+
+### 2. Image-to-3D Generation
+
+```typescript
+const taskId = await client.createTask({
+  type: TaskType.IMAGE_TO_3D,
+  input: 'https://example.com/product-photo.jpg'
+});
+```
+
+### 3. Multi-view to 3D
+
+```typescript
+const taskId = await client.createTask({
+  type: TaskType.MULTIVIEW_TO_3D,
+  inputs: [
+    'https://example.com/front.jpg',
+    'https://example.com/left.jpg',
+    'https://example.com/back.jpg',
+    'https://example.com/right.jpg'
+  ]
+});
+```
+
+### 4. Add Rigging to Model (Tripo only)
+
+```typescript
+const riggedTaskId = await client.createTask({
+  type: TaskType.RIG,
+  taskId: originalTaskId,
+  skeleton: 'biped',
+  outFormat: 'fbx'
+});
+```
+
+### 5. Apply Animation (Tripo only)
+
+```typescript
+const animatedTaskId = await client.createTask({
+  type: TaskType.ANIMATE,
+  taskId: riggedTaskId,
+  animation: 'preset:walk',
+  outFormat: 'glb'
+});
+```
+
+### 6. Convert Format
+
+```typescript
+const convertedTaskId = await client.createTask({
+  type: TaskType.CONVERT,
+  taskId: originalTaskId,
+  format: 'fbx',
+  providerOptions: {
+    export_orientation: '+y',
+    fbx_preset: 'mixamo'
+  }
+});
+```
+
+### 7. Reduce Polygon Count
+
+```typescript
+const decimatedTaskId = await client.createTask({
+  type: TaskType.DECIMATE,
+  taskId: originalTaskId,
+  targetFaceCount: 5000
+});
+```
+
+## React Integration
+
+### Frontend Component
+
+```tsx
+'use client';
+import { useCreateTask, TaskType, TaskStatus } from 'magi-3d/react';
+
+export function Generator() {
+  const { createTask, task, isLoading, progress, error } = useCreateTask({
+    api: '/api/3d',  // Your backend endpoint
+    onSuccess: (task) => console.log('Done!', task.result?.modelGlb)
+  });
+
+  return (
+    <div>
+      <button
+        onClick={() => createTask({
+          type: TaskType.TEXT_TO_3D,
+          prompt: 'a robot'
+        })}
+        disabled={isLoading}
+      >
+        {isLoading ? `${progress}%` : 'Generate'}
+      </button>
+      {task?.status === TaskStatus.SUCCEEDED && (
+        <a href={task.result?.modelGlb}>Download GLB</a>
+      )}
+    </div>
+  );
+}
+```
+
+### Backend API Route (Next.js)
+
+```typescript
+// app/api/3d/route.ts
+import { Magi3DClient, TripoProvider } from 'magi-3d/server';
+
+const provider = new TripoProvider({ apiKey: process.env.TRIPO_API_KEY! });
+const client = new Magi3DClient(provider);
+
+export async function POST(req: Request) {
+  const params = await req.json();
+  const taskId = await client.createTask(params);
+  return Response.json({ taskId });
+}
+
+export async function GET(req: Request) {
+  const taskId = new URL(req.url).searchParams.get('id')!;
+  const task = await client.getTask(taskId);
+  return Response.json(task);
+}
+```
+
+## TaskType Reference
+
+| Type | Description | Required Params | Provider |
+|------|-------------|-----------------|----------|
+| `TEXT_TO_3D` | Generate from text | `prompt` | Both |
+| `IMAGE_TO_3D` | Generate from image | `input` | Both |
+| `MULTIVIEW_TO_3D` | Generate from views | `inputs[]` | Both |
+| `RIG` | Add skeleton | `taskId`, `skeleton` | Tripo |
+| `ANIMATE` | Apply animation | `taskId`, `animation` | Tripo |
+| `TEXTURE` | Re-texture model | `taskId` | Both |
+| `DECIMATE` | Reduce polygons | `taskId` | Both |
+| `CONVERT` | Format conversion | `taskId`, `format` | Both |
+| `UV_UNWRAP` | UV展开 | `modelUrl` | Hunyuan |
+| `SEGMENT` | Component split | `modelUrl` | Both |
+
+## Provider Options (providerOptions)
+
+Use `providerOptions` for any provider-specific parameter. These are passed directly to the provider API.
+
+### Tripo Generation Options
+
+```typescript
+providerOptions: {
+  model_version: 'v3.0-20250812',  // or 'v2.5-20250123', 'Turbo-v1.0-20250506'
+  pbr: true,
+  texture: true,
+  texture_quality: 'detailed',     // 'standard' | 'detailed'
+  geometry_quality: 'detailed',    // v3.0+ only
+  face_limit: 50000,
+  quad: false,
+  auto_size: true,                 // Real-world scale in meters
+  orientation: 'align_image'
+}
+```
+
+### Tripo CONVERT Options
+
+```typescript
+providerOptions: {
+  format: 'FBX',
+  quad: true,
+  face_limit: 10000,
+  texture_size: 2048,
+  pack_uv: true,
+  export_orientation: '+y',        // '+x', '-x', '+y', '-y'
+  fbx_preset: 'mixamo',            // 'blender', '3dsmax', 'mixamo'
+  with_animation: true,
+  bake: true
+}
+```
+
+### Hunyuan Generation Options
+
+```typescript
+providerOptions: {
+  EnablePBR: true,
+  FaceCount: 500000,               // 40,000 - 1,500,000
+  GenerateType: 'Normal',          // 'Normal', 'LowPoly', 'Geometry', 'Sketch'
+  PolygonType: 'triangle',         // 'triangle', 'quadrilateral'
+  ResultFormat: 'GLB'              // Rapid only: 'OBJ', 'GLB', 'STL', 'USDZ', 'FBX'
+}
+```
+
+## StandardTask Response
+
+All providers return this normalized format:
+
+```typescript
+interface StandardTask {
+  id: string;
+  provider: 'tripo' | 'hunyuan';
+  type: TaskType;
+  status: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED';
+  progress: number;           // 0-100
+  progressDetail?: string;    // Raw provider status
+  result?: {
+    modelGlb: string;         // Primary GLB URL
+    modelPbr?: string;        // PBR model URL
+    modelFbx?: string;
+    modelObj?: string;
+    thumbnail?: string;
+    video?: string;
+  };
+  error?: {
+    code: string;
+    message: string;
+    raw: unknown;             // Provider's raw error
+  };
+}
+```
+
+## Error Handling
+
+```typescript
+import { TaskError, ApiError } from 'magi-3d/server';
+
+try {
+  const result = await client.pollUntilDone(taskId);
+} catch (error) {
+  if (error instanceof TaskError) {
+    // Task failed during generation
+    console.log('Task failed:', error.code);
+    console.log('Details:', error.task.error?.raw);
+  } else if (error instanceof ApiError) {
+    // API request failed
+    console.log('API error:', error.code, error.httpStatus);
+  }
+}
+```
+
+## Provider Comparison
+
+| Feature | Tripo | Hunyuan |
+|---------|-------|---------|
+| Auth | API Key | SecretId + SecretKey |
+| Input | URL only | URL or Base64 |
+| Progress | Granular % | Estimated (0/50/100%) |
+| Rigging | Yes | No |
+| Animation | Yes | No |
+| Chinese prompts | OK | Excellent |
+
+---
+
+# PART 2: FOR SDK CONTRIBUTORS
+
+## Project Structure
+
+```
+magi-3d-sdk/
+├── src/
+│   ├── core/
+│   │   ├── AbstractProvider.ts   # Base class all providers extend
+│   │   └── Magi3DClient.ts       # High-level client with polling
+│   ├── providers/
+│   │   ├── TripoProvider.ts      # Tripo AI implementation
+│   │   └── HunyuanProvider.ts    # Hunyuan implementation
+│   ├── react/
+│   │   ├── useCreateTask.ts      # Main hook for generation
+│   │   ├── useTaskStatus.ts      # Status tracking hook
+│   │   └── usePolling.ts         # Shared polling logic
+│   ├── types/
+│   │   ├── enums.ts              # TaskType, TaskStatus, ProviderId
+│   │   ├── params.ts             # TaskParams union type + options
+│   │   ├── result.ts             # StandardTask, TaskArtifacts
+│   │   └── config.ts             # Provider configs
+│   └── utils/
+│       ├── InputUtils.ts         # URL/base64 validation
+│       └── TencentCloudSigner.ts # TC3-HMAC-SHA256 for Hunyuan
+├── scripts/
+│   └── test-*.ts                 # E2E test scripts
+└── package.json
+```
+
+## Build & Test Commands
+
+```bash
+pnpm build          # Build with tsup (ESM + CJS)
+pnpm test           # Run unit tests (Vitest)
+pnpm typecheck      # TypeScript check
+pnpm docs           # Generate TypeDoc
+
+# E2E tests (requires API keys in .env)
+pnpm test:tripo     # Quick Tripo test
+pnpm test:tripo all # Full Tripo test suite
+pnpm test:hunyuan   # Quick Hunyuan test
+```
+
+## Core Architecture
+
+### AbstractProvider (Base Class)
+
+All providers extend this class and implement 3 methods:
+
+```typescript
+abstract class AbstractProvider<TConfig> {
+  protected abstract prepareInput(input: string): Promise<string>;
+  protected abstract doCreateTask(params: TaskParams): Promise<string>;
+  abstract getTaskStatus(taskId: string): Promise<StandardTask>;
+}
+```
+
+### Provider Flow
+
+```
+createTask(params)
+    │
+    ├─→ prepareInput(input)     // Validate/transform input
+    │
+    ├─→ doCreateTask(params)    // Call provider API
+    │       │
+    │       └─→ buildPayload()  // Build provider-specific request
+    │
+    └─→ return taskId
+
+getTask(taskId)
+    │
+    └─→ getTaskStatus(taskId)
+            │
+            └─→ normalizeResponse()  // Map to StandardTask
+```
+
+## Adding a New Task Type
+
+1. **Add enum value** in `src/types/enums.ts`:
+```typescript
+export enum TaskType {
+  // ... existing
+  NEW_TASK = 'new_task_value'
+}
+```
+
+2. **Add params interface** in `src/types/params.ts`:
+```typescript
+export interface NewTaskParams<T = unknown> extends BaseTaskParams<T> {
+  type: TaskType.NEW_TASK;
+  taskId: string;
+  // ... specific params
+}
+
+// Add to TaskParams union
+export type TaskParams<T = unknown> =
+  | ...
+  | NewTaskParams<T>;
+
+// Add type guard
+export function isNewTaskParams(p: TaskParams): p is NewTaskParams {
+  return p.type === TaskType.NEW_TASK;
+}
+```
+
+3. **Handle in providers** (`src/providers/TripoProvider.ts`, etc.):
+```typescript
+// In constructor - register support
+this.supportedTaskTypes.add(TaskType.NEW_TASK);
+
+// In buildPayload() - build request
+if (isNewTaskParams(params)) {
+  return {
+    type: 'provider_task_type',
+    original_model_task_id: params.taskId,
+    ...options
+  };
+}
+```
+
+## Adding a New Provider
+
+1. **Create provider file** `src/providers/NewProvider.ts`:
+
+```typescript
+import { AbstractProvider } from '../core/AbstractProvider';
+import { TaskParams, StandardTask, TaskType, ProviderId } from '../types';
+import { InputUtils } from '../utils/InputUtils';
+
+export interface NewProviderConfig {
+  apiKey: string;
+  baseUrl?: string;
+}
+
+export class NewProvider extends AbstractProvider<NewProviderConfig> {
+  readonly name = 'NewProvider';
+  private client: AxiosInstance;
+
+  constructor(config: NewProviderConfig) {
+    super(config);
+
+    // Register supported task types
+    this.supportedTaskTypes.add(TaskType.TEXT_TO_3D);
+    this.supportedTaskTypes.add(TaskType.IMAGE_TO_3D);
+
+    // Setup HTTP client
+    this.client = axios.create({
+      baseURL: config.baseUrl ?? 'https://api.newprovider.com',
+      headers: { 'Authorization': `Bearer ${config.apiKey}` }
+    });
+  }
+
+  protected async prepareInput(input: string): Promise<string> {
+    InputUtils.validate(input);
+    return input;
+  }
+
+  protected async doCreateTask(params: TaskParams): Promise<string> {
+    const payload = this.buildPayload(params);
+    const response = await this.client.post('/tasks', payload);
+    return response.data.task_id;
+  }
+
+  async getTaskStatus(taskId: string): Promise<StandardTask> {
+    const response = await this.client.get(`/tasks/${taskId}`);
+    return this.normalizeResponse(response.data, taskId);
+  }
+
+  private buildPayload(params: TaskParams): Record<string, unknown> {
+    // Map SDK params to provider API format
+  }
+
+  private normalizeResponse(data: any, taskId: string): StandardTask {
+    // Map provider response to StandardTask format
+  }
+}
+```
+
+2. **Export from** `src/server/index.ts`:
+```typescript
+export { NewProvider, type NewProviderConfig } from '../providers/NewProvider';
+```
+
+3. **Add to ProviderId enum** in `src/types/enums.ts`:
+```typescript
+export enum ProviderId {
+  TRIPO = 'tripo',
+  HUNYUAN = 'hunyuan',
+  NEW_PROVIDER = 'new_provider'
+}
+```
+
+## Adding Provider Options
+
+1. **Add to options interface** in `src/types/params.ts`:
+```typescript
+export interface TripoOptions {
+  // ... existing
+  new_option?: string;
+}
+```
+
+2. **Handle in buildPayload()** in provider:
+```typescript
+...(params.providerOptions?.new_option && {
+  new_option: params.providerOptions.new_option
+})
+```
+
+## Key Files Reference
+
+| Task | Files to Modify |
+|------|-----------------|
+| Add task type | `enums.ts`, `params.ts`, `*Provider.ts` |
+| Add provider option | `params.ts` (Options interface), `*Provider.ts` (buildPayload) |
+| Add result field | `result.ts`, `*Provider.ts` (normalizeResponse) |
+| Change polling logic | `Magi3DClient.ts`, `usePolling.ts` |
+| Add React hook | `src/react/`, export from `react/index.ts` |
+| Add error code | `*Provider.ts` (error mapping) |
+
+## Testing a Provider
+
+Create test in `scripts/test-provider.ts`:
+
+```typescript
+import { Magi3DClient, NewProvider, TaskType } from '../src/server';
+
+async function main() {
+  const provider = new NewProvider({ apiKey: process.env.NEW_API_KEY! });
+  const client = new Magi3DClient(provider);
+
+  // Test TEXT_TO_3D
+  console.log('Testing TEXT_TO_3D...');
+  const taskId = await client.createTask({
+    type: TaskType.TEXT_TO_3D,
+    prompt: 'a test cube'
+  });
+
+  const result = await client.pollUntilDone(taskId, {
+    onProgress: (t) => console.log(`Progress: ${t.progress}%`)
+  });
+
+  console.log('Result:', result.result?.modelGlb);
+}
+
+main().catch(console.error);
+```
+
+## Code Conventions
+
+- Use `async/await` for all async operations
+- Prefix private methods with no underscore (use `private` keyword)
+- Error codes should be SCREAMING_SNAKE_CASE
+- Provider-specific code stays in provider files
+- Normalize all responses to StandardTask format
+- Keep type guards in `params.ts`
+- Export public APIs from index files
+
+## Hunyuan Implementation Notes
+
+- Uses TC3-HMAC-SHA256 signing (see `TencentCloudSigner.ts`)
+- Different API actions for different task types (SubmitHunyuanTo3DProJob, etc.)
+- Progress is estimated (no granular % from API)
+- Supports both URL and Base64 image input
+- Format conversion is synchronous (no polling needed)
+
+## Tripo Implementation Notes
+
+- Uses simple API key auth
+- Single endpoint for all task types (`POST /v2/openapi/task`)
+- Granular progress percentage in response
+- URL input only (no Base64)
+- All operations are async (polling required)
+- Error codes in response `code` field

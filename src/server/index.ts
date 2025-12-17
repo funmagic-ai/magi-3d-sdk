@@ -1,6 +1,6 @@
 /**
  * @module magi-3d/server
- * @description
+ *
  * Server-side exports for Magi 3D SDK.
  *
  * Use this module in your API routes (Next.js, Express, etc.) where you need

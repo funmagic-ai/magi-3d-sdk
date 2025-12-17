@@ -165,12 +165,22 @@ const provider = new HunyuanProvider({
 });
 ```
 
+**Progress Reporting:** Hunyuan API does not return granular progress percentages. The SDK estimates progress based on task status:
+- `PENDING` (WAIT) → 0%
+- `PROCESSING` (RUN) → 50%
+- `SUCCEEDED` (DONE) → 100%
+
+The raw Hunyuan status is available in `task.progressDetail` for debugging.
+
 **Supported Task Types:**
 - `TEXT_TO_3D` - Generate from text prompt
 - `IMAGE_TO_3D` - Generate from image URL or base64
+- `MULTIVIEW_TO_3D` - Generate from multiple views (Pro only)
 - `TEXTURE` - Add texture to geometry
-- `DECIMATE` - Reduce face count
-- `CONVERT` - Format conversion
+- `DECIMATE` - Reduce face count 
+- `UV_UNWRAP` - UV展开
+- `SEGMENT` - Component generation 
+- `CONVERT` - Format conversion (sync)
 
 ## React Hooks
 
@@ -285,6 +295,12 @@ All operations use a single `createTask()` method. The `type` field determines t
 | `auto_size` | boolean | false | v2.0+ | Real-world scale (meters) |
 | `orientation` | `'default'` \| `'align_image'` | default | v2.0+ | Model orientation |
 | `model_seed` | number | random | v2.0+ | Reproducible geometry |
+| `smart_low_poly` | boolean | false | v2.0+ | Hand-crafted low-poly topology |
+| `generate_parts` | boolean | false | v2.0+ | Generate segmented parts |
+| `compress` | `'geometry'` | - | v2.0+ | Apply meshopt compression |
+| `enable_image_autofix` | boolean | false | All | Optimize input image |
+| `negative_prompt` | string | - | Text only | Reverse direction prompt |
+| `image_seed` | number | random | Text only | Seed for prompt processing |
 
 #### RIG Parameters
 
@@ -293,31 +309,107 @@ All operations use a single `createTask()` method. The `type` field determines t
 | `skeleton` | string | `'biped'`, `'quadruped'`, `'hexapod'`, `'octopod'`, `'avian'`, `'serpentine'`, `'aquatic'` | Skeleton type |
 | `outFormat` | string | `'glb'`, `'fbx'` | Output format |
 
+**Additional `providerOptions`** for RIG:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model_version` | string | `'v2.0-20250506'` or `'v1.0-20240301'` (default) |
+| `spec` | string | Rigging method: `'tripo'` (default) or `'mixamo'` |
+
 #### ANIMATE Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `animation` | string | Animation preset (e.g., `'preset:walk'`, `'preset:run'`, `'preset:idle'`) |
 | `outFormat` | string | `'glb'` or `'fbx'` |
+| `animateInPlace` | boolean | Animate in fixed place (default: false) |
+
+**Additional `providerOptions`** for ANIMATE:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bake_animation` | boolean | Bake animation into model (default: true) |
+| `export_with_geometry` | boolean | Include geometry in output (default: true) |
+| `animations` | string[] | Array of presets (max 5) |
 
 #### TEXTURE Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `prompt` | string | Texture description |
+| `styleImage` | string | Style reference image URL |
 | `enablePBR` | boolean | Enable PBR materials |
+
+**Additional `providerOptions`** for TEXTURE:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `texture_seed` | number | Reproducible textures |
+| `texture_alignment` | string | `'original_image'` or `'geometry'` |
+| `texture_quality` | string | `'standard'` or `'detailed'` |
+| `part_names` | string[] | Parts from segmentation |
+| `compress` | string | `'geometry'` for meshopt |
+| `model_version` | string | `'v2.5-20250123'`, `'v3.0-20250812'` |
+| `bake` | boolean | Bake material effects (default: true) |
 
 #### DECIMATE Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `targetFaceCount` | number | Target polygon count |
+| `targetFaceCount` | number | Target polygon count (1000-16000) |
+| `quad` | boolean | Generate quad mesh |
+| `bake` | boolean | Bake textures (default: true) |
+
+**Additional `providerOptions`** for DECIMATE:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model_version` | string | `'P-v1.0-20250506'` |
+| `part_names` | string[] | Parts from segmentation |
 
 #### CONVERT Parameters
 
-| Parameter | Type | Values |
-|-----------|------|--------|
-| `format` | string | `'glb'`, `'fbx'`, `'usdz'`, `'obj'`, `'stl'` |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `format` | string | Target: `'gltf'`, `'glb'`, `'fbx'`, `'obj'`, `'usdz'`, `'stl'`, `'3mf'` |
+| `quad` | boolean | Enable quad remeshing |
+| `faceLimit` | number | Face count limit (default: 10000) |
+| `textureSize` | number | Texture size in pixels |
+| `scaleFactor` | number | Object scale (default: 1) |
+
+**Additional `providerOptions`** for CONVERT (passed directly to Tripo API):
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `force_symmetry` | boolean | Force symmetry (only when quad=true) |
+| `flatten_bottom` | boolean | Flatten the bottom of model |
+| `flatten_bottom_threshold` | number | Bottom flatten depth (default: 0.01) |
+| `texture_format` | string | `'JPEG'`, `'PNG'`, `'WEBP'`, etc. |
+| `pivot_to_center_bottom` | boolean | Set pivot to center bottom |
+| `with_animation` | boolean | Include skeletal binding (default: true) |
+| `pack_uv` | boolean | Combine UV islands into one layout |
+| `bake` | boolean | Bake textures (default: true) |
+| `export_vertex_colors` | boolean | Include vertex colors (OBJ/GLTF only) |
+| `export_orientation` | string | Model facing: `'+x'`, `'-x'`, `'+y'`, `'-y'` |
+| `fbx_preset` | string | Target: `'blender'`, `'3dsmax'`, `'mixamo'` |
+
+#### Using providerOptions
+
+For any provider-specific parameters not exposed as explicit props, use `providerOptions`. These are passed directly to the provider API:
+
+```typescript
+createTask({
+  type: TaskType.CONVERT,
+  taskId: 'original-id',
+  format: 'fbx',
+  providerOptions: {
+    export_orientation: '+y',
+    pack_uv: true,
+    fbx_preset: 'mixamo',
+    // Any Tripo API param works here
+  }
+});
+```
 
 #### Example
 
@@ -403,11 +495,40 @@ createTask({
 | `FaceLevel` | string | `'high'`, `'medium'`, `'low'` | Reduction level |
 | `PolygonType` | string | `'triangle'`, `'quadrilateral'` | Output mesh type |
 
+#### UV_UNWRAP Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `modelUrl` | string | 3D file URL (FBX, OBJ, GLB) |
+
+#### SEGMENT Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `modelUrl` | string | 3D file URL (FBX only) |
+
 #### CONVERT Parameters (Sync)
 
 | Parameter | Type | Values |
 |-----------|------|--------|
 | `format` | string | `'STL'`, `'USDZ'`, `'FBX'`, `'MP4'`, `'GIF'` |
+
+#### Using providerOptions (Hunyuan)
+
+Similar to Tripo, use `providerOptions` for provider-specific parameters:
+
+```typescript
+createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a cute cat',
+  providerOptions: {
+    EnablePBR: true,
+    FaceCount: 500000,
+    GenerateType: 'Normal'
+    // Any Hunyuan API param works here
+  }
+});
+```
 
 #### Example
 
@@ -415,7 +536,7 @@ createTask({
 // Professional: High-quality generation
 createTask({
   type: TaskType.TEXT_TO_3D,
-  prompt: '一只可爱的猫',  // Chinese prompts work well
+  prompt: 'a cute cat',  // Chinese prompts work well
   providerOptions: {
     EnablePBR: true,
     FaceCount: 500000,

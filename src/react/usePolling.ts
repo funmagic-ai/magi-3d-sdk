@@ -125,9 +125,8 @@ export interface UsePollingReturn {
  *
  * @remarks
  * This hook provides the core polling functionality used by:
- * - {@link useGenerate3D} - For new generation tasks
+ * - {@link useCreateTask} - For creating and polling generation tasks
  * - {@link useTaskStatus} - For tracking existing tasks
- * - {@link usePostProcess} - For post-processing tasks
  *
  * **Features:**
  * - Automatic polling with configurable interval

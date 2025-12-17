@@ -1,6 +1,6 @@
 /**
  * @module magi-3d/react
- * @description
+ *
  * React hooks for Magi 3D SDK.
  *
  * Use this module in your React frontend to create and track 3D generation tasks.
