@@ -5,6 +5,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // Use jsdom for React hook tests
+    environmentMatchGlobs: [
+      ['tests/react/**', 'jsdom']
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
