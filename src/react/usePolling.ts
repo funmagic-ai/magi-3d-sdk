@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { StandardTask, TaskStatus } from '../types';
+import { StandardTask, TaskStatus, ProviderId } from '../types';
 
 /**
  * Terminal task statuses that stop polling
@@ -38,6 +38,12 @@ export interface UsePollingOptions {
    * The hook will fetch from `{api}/task/{taskId}`.
    */
   api: string;
+
+  /**
+   * Provider ID for the task.
+   * Sent as query parameter so backend knows which provider to query.
+   */
+  providerId?: ProviderId;
 
   /**
    * Time between status checks in milliseconds.
@@ -168,6 +174,7 @@ export interface UsePollingReturn {
 export function usePolling(options: UsePollingOptions): UsePollingReturn {
   const {
     api,
+    providerId,
     pollingInterval = 3000,
     timeout = 300000,
     maxRetries = 5,
@@ -223,7 +230,13 @@ export function usePolling(options: UsePollingOptions): UsePollingReturn {
   }, [stopPolling, pollingInterval]);
 
   const fetchTaskStatus = useCallback(async (id: string, signal?: AbortSignal): Promise<StandardTask> => {
-    const response = await fetch(`${api}/task/${id}`, {
+    // Build URL with optional providerId query parameter
+    let url = `${api}/task/${id}`;
+    if (providerId) {
+      url += `?providerId=${encodeURIComponent(providerId)}`;
+    }
+
+    const response = await fetch(url, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -237,7 +250,7 @@ export function usePolling(options: UsePollingOptions): UsePollingReturn {
     }
 
     return response.json();
-  }, [api, headers]);
+  }, [api, providerId, headers]);
 
   const pollTask = useCallback(async (id: string) => {
     // Check timeout

@@ -173,10 +173,15 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
   /**
    * Creates a new TripoProvider instance.
    *
-   * @param config - Tripo API configuration
+   * @param config - Tripo API configuration. If apiKey is not provided,
+   *                 it will be read from TRIPO_API_KEY environment variable.
    *
    * @example
    * ```typescript
+   * // Using environment variable (process.env.TRIPO_API_KEY)
+   * const provider = new TripoProvider();
+   *
+   * // Or with explicit API key
    * const provider = new TripoProvider({
    *   apiKey: 'your-api-key',
    *   baseUrl: 'https://api.tripo3d.ai',  // Optional
@@ -184,13 +189,22 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
    * });
    * ```
    */
-  constructor(config: TripoConfig) {
-    super(config);
+  constructor(config: TripoConfig = {}) {
+    // Resolve API key from config or environment variable
+    const apiKey = config.apiKey || process.env.TRIPO_API_KEY;
+
+    if (!apiKey) {
+      throw new Error(
+        'Tripo API key is required. Provide it via config.apiKey or set TRIPO_API_KEY environment variable.'
+      );
+    }
+
+    super({ ...config, apiKey });
 
     this.client = axios.create({
       baseURL: config.baseUrl || 'https://api.tripo3d.ai',
       headers: {
-        'Authorization': `Bearer ${config.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       timeout: config.timeout || 120000
@@ -487,7 +501,8 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
         message: message || 'Task failed',
         raw: { tripoCode, message }
       },
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      rawResponse: { tripoCode, message }
     };
   }
 
@@ -537,19 +552,17 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
     const sdkType = taskTypeMap[data.type] || TaskType.IMAGE_TO_3D;
 
     // Build result artifacts if task succeeded
-    // Output priority for modelGlb: pbr_model > model > base_model
-    // - pbr_model: Available when pbr=true (best quality with PBR materials)
-    // - model: Standard textured model (when pbr=false, texture=true)
-    // - base_model: Base geometry without texture (when texture=false)
+    // Priority for primary model: pbr_model > model > base_model
     let result: TaskArtifacts | undefined;
     if (data.status === 'success' && data.output) {
       const { model, pbr_model, base_model, rendered_image, generated_video } = data.output;
 
-      // Determine the primary GLB model URL
-      const modelGlb = pbr_model || model || base_model || '';
+      // Primary model URL - best available output
+      const primaryModel = pbr_model || model || base_model || '';
 
       result = {
-        modelGlb,
+        model: primaryModel,
+        modelGlb: primaryModel,  // For generation tasks, output is GLB
         modelPbr: pbr_model,
         modelBase: base_model,
         thumbnail: rendered_image,
@@ -605,7 +618,8 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
       createdAt: data.create_time ? data.create_time * 1000 : Date.now(),
       finishedAt: (sdkStatus === TaskStatus.SUCCEEDED || sdkStatus === TaskStatus.FAILED)
         ? Date.now()
-        : undefined
+        : undefined,
+      rawResponse: data
     };
   }
 }

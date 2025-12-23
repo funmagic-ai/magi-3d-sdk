@@ -128,7 +128,7 @@ describe('usePolling', () => {
       const successTask = createMockTask({
         status: TaskStatus.SUCCEEDED,
         progress: 100,
-        result: { modelGlb: 'https://example.com/model.glb' }
+        result: { model: 'https://example.com/model.glb', modelGlb: 'https://example.com/model.glb' }
       });
       mockFetchSuccess(successTask);
 
@@ -455,6 +455,53 @@ describe('usePolling', () => {
               'Authorization': 'Bearer test-token'
             })
           })
+        );
+      });
+    });
+  });
+
+  describe('providerId', () => {
+    it('should include providerId as query parameter when provided', async () => {
+      const task = createMockTask();
+      mockFetchSuccess(task);
+
+      const { result } = renderHook(() =>
+        usePolling({
+          api: '/api/3d',
+          providerId: ProviderId.TRIPO
+        })
+      );
+
+      act(() => {
+        result.current.startPolling('test-task-id');
+      });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          '/api/3d/task/test-task-id?providerId=tripo',
+          expect.any(Object)
+        );
+      });
+    });
+
+    it('should not include providerId query param when not provided', async () => {
+      const task = createMockTask();
+      mockFetchSuccess(task);
+
+      const { result } = renderHook(() =>
+        usePolling({
+          api: '/api/3d'
+        })
+      );
+
+      act(() => {
+        result.current.startPolling('test-task-id');
+      });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          '/api/3d/task/test-task-id',
+          expect.any(Object)
         );
       });
     });

@@ -7,6 +7,7 @@ Universal TypeScript SDK for 3D generative AI providers. Generate 3D models from
 - **Multi-provider support**: Tripo, Hunyuan (Tencent Cloud)
 - **Unified API**: Single `createTask()` method for all operations
 - **React Hooks**: `useCreateTask`, `useTaskStatus`, `usePolling`
+- **Provider metadata**: `PROVIDERS` list and `PROVIDER_TASK_TYPES` mapping for UI
 - **TypeScript-first**: Full type safety and IntelliSense
 - **Modern**: ESM + CJS, tree-shakeable
 
@@ -25,25 +26,26 @@ yarn add magi-3d
 The SDK follows a simple pattern:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  FRONTEND (React)                                               │
-│  ─────────────────                                              │
-│  import { useCreateTask, TaskType } from 'magi-3d/react';       │
-│                                                                 │
-│  Hook handles:                                                  │
-│    POST /api/3d/task      →  submit task                        │
-│    GET  /api/3d/task/:id  →  poll status                        │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  BACKEND (Your API Routes)                                      │
-│  ─────────────────────────────────────────────────────────────  │
-│  import { Magi3DClient, TripoProvider } from 'magi-3d/server';  │
-│                                                                 │
-│  POST /api/3d/task      → client.createTask(params)             │
-│  GET  /api/3d/task/:id  → client.getTask(id)                    │
-└─────────────────────────────────────────────────────────────────┘
++------------------------------------------------------------------+
+|  FRONTEND (React)                                                 |
+|  -----------------                                                |
+|  import { useCreateTask, PROVIDERS, PROVIDER_TASK_TYPES }         |
+|           from 'magi-3d/react';                                   |
+|                                                                   |
+|  Hook handles:                                                    |
+|    POST /api/3d/task           -> submit task with providerId     |
+|    GET  /api/3d/task/:id       -> poll status with providerId     |
++----------------------------------+--------------------------------+
+                                   |
+                                   v
++------------------------------------------------------------------+
+|  BACKEND (Your API Routes)                                        |
+|  ---------------------------------------------------------------- |
+|  import { Magi3DClient, TripoProvider } from 'magi-3d/server';    |
+|                                                                   |
+|  POST /api/3d/task      -> select provider, client.createTask()   |
+|  GET  /api/3d/task/:id  -> select provider, client.getTask(id)    |
++------------------------------------------------------------------+
 ```
 
 ## Quick Start
@@ -52,56 +54,279 @@ The SDK follows a simple pattern:
 
 ```typescript
 // app/api/3d/task/route.ts (Next.js App Router)
-import { Magi3DClient, TripoProvider, TaskType } from 'magi-3d/server';
+import { Magi3DClient, TripoProvider, HunyuanProvider, ProviderId } from 'magi-3d/server';
 
-const provider = new TripoProvider({
-  apiKey: process.env.TRIPO_API_KEY!
-});
-const client = new Magi3DClient(provider);
+// Create provider instances (uses env vars by default)
+const providers = {
+  [ProviderId.TRIPO]: new TripoProvider(),  // Uses TRIPO_API_KEY
+  [ProviderId.HUNYUAN]: new HunyuanProvider({ region: 'ap-guangzhou' })  // Uses HUNYUAN_SECRET_ID/KEY
+};
 
 // Create task
 export async function POST(req: Request) {
-  const params = await req.json();
+  const { providerId = ProviderId.TRIPO, ...params } = await req.json();
+
+  const provider = providers[providerId as ProviderId];
+  if (!provider) {
+    return Response.json({ error: 'Invalid provider' }, { status: 400 });
+  }
+
+  const client = new Magi3DClient(provider);
   const taskId = await client.createTask(params);
   return Response.json({ taskId });
 }
 
-// Get task status
-export async function GET(req: Request) {
+// app/api/3d/task/[id]/route.ts
+export async function GET(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
   const { searchParams } = new URL(req.url);
-  const taskId = searchParams.get('id')!;
-  const task = await client.getTask(taskId);
+  const providerId = searchParams.get('providerId') as ProviderId;
+
+  const provider = providers[providerId];
+  if (!provider) {
+    return Response.json({ error: 'Invalid provider' }, { status: 400 });
+  }
+
+  const client = new Magi3DClient(provider);
+  const task = await client.getTask(params.id);
   return Response.json(task);
 }
 ```
 
-### 2. Frontend: Use React Hooks
+### 2. Frontend: Complete React Hooks Example
 
 ```tsx
 'use client';
 
-import { useCreateTask, TaskType, TaskStatus } from 'magi-3d/react';
+import { useState, useEffect } from 'react';
+import {
+  useCreateTask,
+  useTaskStatus,
+  PROVIDERS,
+  PROVIDER_TASK_TYPES,
+  TaskType,
+  TaskStatus,
+  ProviderId
+} from 'magi-3d/react';
 
-export function TextTo3DGenerator() {
-  const { createTask, task, isLoading, progress, error } = useCreateTask({
+// ============================================
+// Example 1: Create Task with Provider Selection
+// ============================================
+export function Model3DGenerator() {
+  // Provider and task type selection
+  const [providerId, setProviderId] = useState<ProviderId>(ProviderId.TRIPO);
+  const [taskType, setTaskType] = useState<TaskType>(TaskType.TEXT_TO_3D);
+  const [prompt, setPrompt] = useState('');
+
+  // Get available task types for selected provider
+  const availableTaskTypes = PROVIDER_TASK_TYPES[providerId];
+
+  // Reset task type when provider changes if current type not supported
+  useEffect(() => {
+    if (!availableTaskTypes.includes(taskType)) {
+      setTaskType(availableTaskTypes[0]);
+    }
+  }, [providerId, taskType, availableTaskTypes]);
+
+  // Create task hook - handles creation and automatic polling
+  const {
+    createTask,
+    task,
+    taskId,
+    isLoading,
+    progress,
+    error,
+    reset
+  } = useCreateTask({
     api: '/api/3d',
-    onSuccess: (task) => console.log('Done!', task.result?.modelGlb)
+    onSuccess: (task) => {
+      console.log('Model URL:', task.result?.model);  // Primary model URL
+      console.log('Raw API Response:', task.rawResponse);  // Full provider response
+    },
+    onError: (err) => console.error('Generation failed:', err)
   });
+
+  const handleSubmit = async () => {
+    await createTask({
+      type: taskType,
+      prompt,
+      providerId  // Backend uses this to select provider
+    });
+  };
 
   return (
     <div>
-      <button
-        onClick={() => createTask({
-          type: TaskType.TEXT_TO_3D,
-          prompt: 'a cute cat sitting on a cushion'
-        })}
-        disabled={isLoading}
-      >
-        {isLoading ? `Generating (${progress}%)` : 'Generate'}
+      <h2>3D Model Generator</h2>
+
+      {/* Provider Selection - uses PROVIDERS export */}
+      <div>
+        <label>Provider:</label>
+        <select
+          value={providerId}
+          onChange={(e) => setProviderId(e.target.value as ProviderId)}
+          disabled={isLoading}
+        >
+          {PROVIDERS.map(id => (
+            <option key={id} value={id}>{id.toUpperCase()}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Task Type Selection - uses PROVIDER_TASK_TYPES mapping */}
+      <div>
+        <label>Task Type:</label>
+        <select
+          value={taskType}
+          onChange={(e) => setTaskType(e.target.value as TaskType)}
+          disabled={isLoading}
+        >
+          {availableTaskTypes.map(type => (
+            <option key={type} value={type}>{type}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Prompt Input */}
+      <div>
+        <input
+          type="text"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="Enter your prompt..."
+          disabled={isLoading}
+        />
+      </div>
+
+      {/* Submit Button */}
+      <button onClick={handleSubmit} disabled={isLoading || !prompt}>
+        {isLoading ? `Generating (${progress}%)` : 'Generate 3D Model'}
       </button>
 
+      {/* Progress Display */}
+      {isLoading && (
+        <div>
+          <progress value={progress} max={100} />
+          <span>{task?.progressDetail || 'Processing...'}</span>
+        </div>
+      )}
+
+      {/* Result Display */}
       {task?.status === TaskStatus.SUCCEEDED && (
-        <a href={task.result?.modelGlb} download>Download GLB</a>
+        <div>
+          <p>Model ready!</p>
+          <a href={task.result?.model} download>Download Model</a>
+          {task.result?.thumbnail && (
+            <img src={task.result.thumbnail} alt="Preview" />
+          )}
+        </div>
+      )}
+
+      {/* Error Display */}
+      {error && <p style={{ color: 'red' }}>Error: {error.message}</p>}
+
+      {/* Reset Button */}
+      {(task || error) && !isLoading && (
+        <button onClick={reset}>Start New</button>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// Example 2: Track Existing Task Status
+// ============================================
+interface TaskTrackerProps {
+  taskId: string;
+  providerId: ProviderId;
+}
+
+export function TaskTracker({ taskId, providerId }: TaskTrackerProps) {
+  const {
+    task,
+    progress,
+    isPolling,
+    error,
+    startPolling,
+    stopPolling,
+    refresh
+  } = useTaskStatus({
+    api: '/api/3d',
+    providerId,  // Required - tells backend which provider to query
+    pollingInterval: 3000,
+    onComplete: (task) => {
+      console.log('Task completed:', task.status);
+      console.log('Model URL:', task.result?.model);
+      console.log('Raw Response:', task.rawResponse);
+    },
+    onError: (err) => console.error('Polling error:', err)
+  });
+
+  // Start polling when component mounts
+  useEffect(() => {
+    if (taskId) {
+      startPolling(taskId);
+    }
+    return () => stopPolling();
+  }, [taskId, startPolling, stopPolling]);
+
+  return (
+    <div>
+      <h3>Task: {taskId}</h3>
+      <p>Provider: {providerId}</p>
+      <p>Status: {task?.status || 'Loading...'}</p>
+      <p>Progress: {progress}%</p>
+
+      {task?.status === TaskStatus.SUCCEEDED && (
+        <a href={task.result?.model} download>Download Model</a>
+      )}
+
+      {task?.status === TaskStatus.FAILED && (
+        <p style={{ color: 'red' }}>Error: {task.error?.message}</p>
+      )}
+
+      <button onClick={refresh} disabled={isPolling}>
+        Refresh
+      </button>
+    </div>
+  );
+}
+
+// ============================================
+// Example 3: Task History with Status Tracking
+// ============================================
+interface SavedTask {
+  taskId: string;
+  providerId: ProviderId;
+  createdAt: number;
+}
+
+export function TaskHistory() {
+  const [savedTasks, setSavedTasks] = useState<SavedTask[]>([]);
+  const [selectedTask, setSelectedTask] = useState<SavedTask | null>(null);
+
+  return (
+    <div>
+      <h2>Task History</h2>
+
+      {/* List of saved tasks */}
+      <ul>
+        {savedTasks.map((saved) => (
+          <li key={saved.taskId}>
+            <button onClick={() => setSelectedTask(saved)}>
+              {saved.taskId} ({saved.providerId})
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {/* Track selected task status */}
+      {selectedTask && (
+        <TaskTracker
+          taskId={selectedTask.taskId}
+          providerId={selectedTask.providerId}
+        />
       )}
     </div>
   );
@@ -111,9 +336,10 @@ export function TextTo3DGenerator() {
 ### 3. Direct Usage (Node.js / Scripts)
 
 ```typescript
-import { Magi3DClient, TripoProvider, TaskType } from 'magi-3d';
+import { Magi3DClient, TripoProvider, TaskType } from 'magi-3d/server';
 
-const provider = new TripoProvider({ apiKey: 'your-api-key' });
+// Uses TRIPO_API_KEY env var by default
+const provider = new TripoProvider();
 const client = new Magi3DClient(provider);
 
 // Create task
@@ -127,7 +353,8 @@ const result = await client.pollUntilDone(taskId, {
   onProgress: (task) => console.log(`${task.progress}%`)
 });
 
-console.log('Model URL:', result.result?.modelGlb);
+console.log('Model URL:', result.result?.model);  // Primary model URL
+console.log('Raw Response:', result.rawResponse);  // Full provider API response
 ```
 
 ## Supported Providers
@@ -137,6 +364,10 @@ console.log('Model URL:', result.result?.modelGlb);
 ```typescript
 import { TripoProvider } from 'magi-3d/server';
 
+// Option 1: Use environment variable (recommended)
+const provider = new TripoProvider();  // Uses TRIPO_API_KEY
+
+// Option 2: Explicit API key
 const provider = new TripoProvider({
   apiKey: 'your-tripo-api-key'
 });
@@ -158,6 +389,12 @@ const provider = new TripoProvider({
 ```typescript
 import { HunyuanProvider } from 'magi-3d/server';
 
+// Option 1: Use environment variables (recommended)
+const provider = new HunyuanProvider({
+  region: 'ap-guangzhou'
+});  // Uses HUNYUAN_SECRET_ID and HUNYUAN_SECRET_KEY
+
+// Option 2: Explicit credentials
 const provider = new HunyuanProvider({
   secretId: 'your-tencent-secret-id',
   secretKey: 'your-tencent-secret-key',
@@ -166,9 +403,9 @@ const provider = new HunyuanProvider({
 ```
 
 **Progress Reporting:** Hunyuan API does not return granular progress percentages. The SDK estimates progress based on task status:
-- `PENDING` (WAIT) → 0%
-- `PROCESSING` (RUN) → 50%
-- `SUCCEEDED` (DONE) → 100%
+- `PENDING` (WAIT) -> 0%
+- `PROCESSING` (RUN) -> 50%
+- `SUCCEEDED` (DONE) -> 100%
 
 The raw Hunyuan status is available in `task.progressDetail` for debugging.
 
@@ -176,11 +413,13 @@ The raw Hunyuan status is available in `task.progressDetail` for debugging.
 - `TEXT_TO_3D` - Generate from text prompt
 - `IMAGE_TO_3D` - Generate from image URL or base64
 - `MULTIVIEW_TO_3D` - Generate from multiple views (Pro only)
-- `TEXTURE` - Add texture to geometry
-- `DECIMATE` - Reduce face count 
-- `UV_UNWRAP` - UV Unwrap
-- `SEGMENT` - Component generation 
+- `TEXTURE` - Add texture to geometry (requires `modelUrl`)
+- `DECIMATE` - Reduce face count (requires `modelUrl`)
+- `UV_UNWRAP` - UV Unwrap (requires `modelUrl`)
+- `SEGMENT` - Component generation (requires `modelUrl`)
 - `CONVERT` - Format conversion (sync)
+
+> **Note:** Hunyuan post-processing tasks require `modelUrl` instead of `taskId`.
 
 ## React Hooks
 
@@ -210,13 +449,13 @@ const {
 });
 
 // Text-to-3D
-createTask({ type: TaskType.TEXT_TO_3D, prompt: 'a cat' });
+createTask({ type: TaskType.TEXT_TO_3D, prompt: 'a cat', providerId: ProviderId.TRIPO });
 
 // Image-to-3D
-createTask({ type: TaskType.IMAGE_TO_3D, input: 'https://...' });
+createTask({ type: TaskType.IMAGE_TO_3D, input: 'https://...', providerId: ProviderId.HUNYUAN });
 
-// Post-processing (rigging)
-createTask({ type: TaskType.RIG, taskId: 'original-id', skeleton: 'humanoid' });
+// Post-processing (rigging - Tripo)
+createTask({ type: TaskType.RIG, taskId: 'original-id', skeleton: 'biped' });
 
 // Format conversion
 createTask({ type: TaskType.CONVERT, taskId: 'original-id', format: 'fbx' });
@@ -224,36 +463,97 @@ createTask({ type: TaskType.CONVERT, taskId: 'original-id', format: 'fbx' });
 
 ### `useTaskStatus`
 
-Track an existing task by ID.
+Track an existing task by ID. Requires `providerId` so the backend knows which provider to query.
 
 ```tsx
-import { useTaskStatus } from 'magi-3d/react';
+import { useTaskStatus, ProviderId } from 'magi-3d/react';
 
-const { task, progress, startPolling, stopPolling } = useTaskStatus({
+const {
+  task,
+  progress,
+  isPolling,
+  startPolling,
+  stopPolling,
+  refresh
+} = useTaskStatus({
   api: '/api/3d',
-  onComplete: (task) => console.log('Done!')
+  providerId: ProviderId.TRIPO,  // Required
+  onComplete: (task) => console.log('Done!', task.result?.model)
 });
 
+// Start polling for existing task
 startPolling('existing-task-id');
+```
+
+### Provider Metadata
+
+```tsx
+import { PROVIDERS, PROVIDER_TASK_TYPES, ProviderId, TaskType } from 'magi-3d/react';
+
+// List all providers
+console.log(PROVIDERS);  // ['tripo', 'hunyuan']
+
+// Get task types for a provider
+const tripoTypes = PROVIDER_TASK_TYPES[ProviderId.TRIPO];
+// => [TaskType.TEXT_TO_3D, TaskType.IMAGE_TO_3D, TaskType.RIG, ...]
+
+const hunyuanTypes = PROVIDER_TASK_TYPES[ProviderId.HUNYUAN];
+// => [TaskType.TEXT_TO_3D, TaskType.IMAGE_TO_3D, TaskType.TEXTURE, ...]
 ```
 
 ## Task Types
 
 All operations use a single `createTask()` method. The `type` field determines the operation:
 
-| Type | Description | Required Params |
-|------|-------------|-----------------|
-| `TEXT_TO_3D` | Generate from text | `prompt` |
-| `IMAGE_TO_3D` | Generate from image | `input` (URL or base64) |
-| `MULTIVIEW_TO_3D` | Generate from multiple views | `inputs` (array of URLs) |
-| `RIG` | Add skeletal rigging | `taskId`, `skeleton` |
-| `ANIMATE` | Apply animation | `taskId`, `animation` |
-| `TEXTURE` | Re-texture model | `taskId`, optional `prompt` |
-| `REFINE` | Improve quality | `taskId` |
-| `DECIMATE` | Reduce polygons | `taskId`, `targetFaceCount` |
-| `CONVERT` | Format conversion | `taskId`, `format` |
+| Type | Description | Required Params | Tripo | Hunyuan |
+|------|-------------|-----------------|-------|---------|
+| `TEXT_TO_3D` | Generate from text | `prompt` | Yes | Yes |
+| `IMAGE_TO_3D` | Generate from image | `input` (URL or base64) | Yes | Yes |
+| `MULTIVIEW_TO_3D` | Generate from views | `inputs` (array of URLs) | Yes | Yes |
+| `RIG` | Add skeletal rigging | `taskId`, `skeleton` | Yes | No |
+| `ANIMATE` | Apply animation | `taskId`, `animation` | Yes | No |
+| `TEXTURE` | Re-texture model | `taskId` or `modelUrl` | Yes | Yes |
+| `REFINE` | Improve quality | `taskId` | Yes | No |
+| `DECIMATE` | Reduce polygons | `taskId` or `modelUrl` | Yes | Yes |
+| `CONVERT` | Format conversion | `taskId`, `format` | Yes | Yes |
 
 > **Note:** `IMAGE_TO_3D` and `MULTIVIEW_TO_3D` do not support text prompts. Use `TEXT_TO_3D` if you need prompt-based generation.
+
+## StandardTask Response
+
+All providers return this normalized format:
+
+```typescript
+interface StandardTask {
+  id: string;
+  provider: 'tripo' | 'hunyuan';
+  type: TaskType;
+  status: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED';
+  progress: number;           // 0-100
+  progressDetail?: string;    // Raw provider status
+
+  result?: {
+    model: string;            // Primary model URL - always use this
+    modelGlb?: string;        // GLB URL (when format is known)
+    modelPbr?: string;        // PBR model URL
+    modelFbx?: string;
+    modelObj?: string;
+    thumbnail?: string;
+    video?: string;
+  };
+
+  error?: {
+    code: string;
+    message: string;
+    raw?: unknown;            // Provider's raw error
+  };
+
+  rawResponse?: unknown;      // Full provider API response for debugging
+
+  createdAt: number;
+  finishedAt?: number;
+}
+```
 
 ## Task Status
 
@@ -276,7 +576,7 @@ All operations use a single `createTask()` method. The `type` field determines t
 | `Turbo-v1.0-20250506` | ~10s | Good | Fast prototyping |
 | `v3.0-20250812` | ~60s | Best | Supports `geometry_quality` for Ultra version|
 | `v2.5-20250123` | ~45s | High | Balanced |
-| `v2.0-20240919` | ~45s | High | Stable,Fast |
+| `v2.0-20240919` | ~45s | High | Stable, Fast |
 | `v1.4-20240625` | ~40s | Medium | Legacy |
 
 #### TEXT_TO_3D / IMAGE_TO_3D Parameters
@@ -301,115 +601,6 @@ All operations use a single `createTask()` method. The `type` field determines t
 | `enable_image_autofix` | boolean | false | All | Optimize input image |
 | `negative_prompt` | string | - | Text only | Reverse direction prompt |
 | `image_seed` | number | random | Text only | Seed for prompt processing |
-
-#### RIG Parameters
-
-| Parameter | Type | Values | Description |
-|-----------|------|--------|-------------|
-| `skeleton` | string | `'biped'`, `'quadruped'`, `'hexapod'`, `'octopod'`, `'avian'`, `'serpentine'`, `'aquatic'` | Skeleton type |
-| `outFormat` | string | `'glb'`, `'fbx'` | Output format |
-
-**Additional `providerOptions`** for RIG:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model_version` | string | `'v2.0-20250506'` or `'v1.0-20240301'` (default) |
-| `spec` | string | Rigging method: `'tripo'` (default) or `'mixamo'` |
-
-#### ANIMATE Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `animation` | string | Animation preset (e.g., `'preset:walk'`, `'preset:run'`, `'preset:idle'`) |
-| `outFormat` | string | `'glb'` or `'fbx'` |
-| `animateInPlace` | boolean | Animate in fixed place (default: false) |
-
-**Additional `providerOptions`** for ANIMATE:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `bake_animation` | boolean | Bake animation into model (default: true) |
-| `export_with_geometry` | boolean | Include geometry in output (default: true) |
-| `animations` | string[] | Array of presets (max 5) |
-
-#### TEXTURE Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `prompt` | string | Texture description |
-| `styleImage` | string | Style reference image URL |
-| `enablePBR` | boolean | Enable PBR materials |
-
-**Additional `providerOptions`** for TEXTURE:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `texture_seed` | number | Reproducible textures |
-| `texture_alignment` | string | `'original_image'` or `'geometry'` |
-| `texture_quality` | string | `'standard'` or `'detailed'` |
-| `part_names` | string[] | Parts from segmentation |
-| `compress` | string | `'geometry'` for meshopt |
-| `model_version` | string | `'v2.5-20250123'`, `'v3.0-20250812'` |
-| `bake` | boolean | Bake material effects (default: true) |
-
-#### DECIMATE Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `targetFaceCount` | number | Target polygon count (1000-16000) |
-| `quad` | boolean | Generate quad mesh |
-| `bake` | boolean | Bake textures (default: true) |
-
-**Additional `providerOptions`** for DECIMATE:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model_version` | string | `'P-v1.0-20250506'` |
-| `part_names` | string[] | Parts from segmentation |
-
-#### CONVERT Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `format` | string | Target: `'gltf'`, `'glb'`, `'fbx'`, `'obj'`, `'usdz'`, `'stl'`, `'3mf'` |
-| `quad` | boolean | Enable quad remeshing |
-| `faceLimit` | number | Face count limit (default: 10000) |
-| `textureSize` | number | Texture size in pixels |
-| `scaleFactor` | number | Object scale (default: 1) |
-
-**Additional `providerOptions`** for CONVERT (passed directly to Tripo API):
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `force_symmetry` | boolean | Force symmetry (only when quad=true) |
-| `flatten_bottom` | boolean | Flatten the bottom of model |
-| `flatten_bottom_threshold` | number | Bottom flatten depth (default: 0.01) |
-| `texture_format` | string | `'JPEG'`, `'PNG'`, `'WEBP'`, etc. |
-| `pivot_to_center_bottom` | boolean | Set pivot to center bottom |
-| `with_animation` | boolean | Include skeletal binding (default: true) |
-| `pack_uv` | boolean | Combine UV islands into one layout |
-| `bake` | boolean | Bake textures (default: true) |
-| `export_vertex_colors` | boolean | Include vertex colors (OBJ/GLTF only) |
-| `export_orientation` | string | Model facing: `'+x'`, `'-x'`, `'+y'`, `'-y'` |
-| `fbx_preset` | string | Target: `'blender'`, `'3dsmax'`, `'mixamo'` |
-
-#### Using providerOptions
-
-For any provider-specific parameters not exposed as explicit props, use `providerOptions`. These are passed directly to the provider API:
-
-```typescript
-createTask({
-  type: TaskType.CONVERT,
-  taskId: 'original-id',
-  format: 'fbx',
-  providerOptions: {
-    export_orientation: '+y',
-    pack_uv: true,
-    fbx_preset: 'mixamo',
-    // Any Tripo API param works here
-  }
-});
-```
 
 #### Example
 
@@ -464,14 +655,6 @@ createTask({
 | `GenerateType` | string | `'Normal'` | Generation mode (see below) |
 | `PolygonType` | `'triangle'` \| `'quadrilateral'` | triangle | Mesh type (LowPoly only) |
 
-#### TEXT_TO_3D / IMAGE_TO_3D Parameters (Rapid)
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `EnablePBR` | boolean | false | Enable PBR materials |
-| `EnableGeometry` | boolean | false | White model without texture |
-| `ResultFormat` | string | `'OBJ'` | Output: `'OBJ'`, `'GLB'`, `'STL'`, `'USDZ'`, `'FBX'`, `'MP4'` |
-
 #### GenerateType Values (Professional)
 
 | Value | Description | Notes |
@@ -481,62 +664,13 @@ createTask({
 | `'Geometry'` | White model (no texture) | `EnablePBR` ignored |
 | `'Sketch'` | From sketch/line art | Can combine with `prompt` |
 
-#### TEXTURE Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `prompt` | string | Texture description (optional) |
-| `EnablePBR` | boolean | Enable PBR materials |
-
-#### DECIMATE Parameters
-
-| Parameter | Type | Values | Description |
-|-----------|------|--------|-------------|
-| `FaceLevel` | string | `'high'`, `'medium'`, `'low'` | Reduction level |
-| `PolygonType` | string | `'triangle'`, `'quadrilateral'` | Output mesh type |
-
-#### UV_UNWRAP Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `modelUrl` | string | 3D file URL (FBX, OBJ, GLB) |
-
-#### SEGMENT Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `modelUrl` | string | 3D file URL (FBX only) |
-
-#### CONVERT Parameters (Sync)
-
-| Parameter | Type | Values |
-|-----------|------|--------|
-| `format` | string | `'STL'`, `'USDZ'`, `'FBX'`, `'MP4'`, `'GIF'` |
-
-#### Using providerOptions (Hunyuan)
-
-Similar to Tripo, use `providerOptions` for provider-specific parameters:
-
-```typescript
-createTask({
-  type: TaskType.TEXT_TO_3D,
-  prompt: 'a cute cat',
-  providerOptions: {
-    EnablePBR: true,
-    FaceCount: 500000,
-    GenerateType: 'Normal'
-    // Any Hunyuan API param works here
-  }
-});
-```
-
 #### Example
 
 ```typescript
 // Professional: High-quality generation
 createTask({
   type: TaskType.TEXT_TO_3D,
-  prompt: 'a cute cat',  // Chinese prompts work well
+  prompt: 'a cute cat',
   providerOptions: {
     EnablePBR: true,
     FaceCount: 500000,
@@ -554,20 +688,10 @@ createTask({
   }
 });
 
-// Rapid: Fast generation with specific format
-createTask({
-  type: TaskType.TEXT_TO_3D,
-  prompt: 'a simple chair',
-  providerOptions: {
-    ResultFormat: 'GLB',
-    EnablePBR: true
-  }
-});
-
-// Decimate: Reduce polygon count
+// Decimate: Reduce polygon count (requires modelUrl for Hunyuan)
 createTask({
   type: TaskType.DECIMATE,
-  taskId: 'original-task-id',
+  modelUrl: 'https://example.com/model.glb',  // Not taskId!
   providerOptions: {
     FaceLevel: 'low',
     PolygonType: 'triangle'
@@ -609,71 +733,6 @@ try {
 }
 ```
 
-### StandardTask.error Structure
-
-```typescript
-// When task.status === FAILED or CANCELED
-{
-  code: string;      // e.g., 'CONTENT_POLICY_VIOLATION', 'RATE_LIMIT_EXCEEDED'
-  message: string;   // Human-readable error message
-  raw: unknown;      // Original provider response for debugging
-}
-```
-
-### Tripo Error Handling
-
-Tripo errors are identified by HTTP status code + Tripo error code:
-
-| Range | HTTP Status | Type |
-|-------|-------------|------|
-| 1000-1999 | 400-499 (1000/1001: 500) | Request errors |
-| 2000-2999 | 400-499 | Task generation errors |
-
-#### Tripo Error Codes
-
-| Tripo Code | SDK Error Code | HTTP | Description |
-|------------|----------------|------|-------------|
-| 1000 | SERVER_ERROR | 500 | Server error |
-| 1001 | FATAL_SERVER_ERROR | 500 | Fatal server error |
-| 2000 | RATE_LIMIT_EXCEEDED | 429 | Rate limit hit |
-| 2001 | TASK_NOT_FOUND | 404 | Invalid task ID |
-| 2002 | UNSUPPORTED_TASK_TYPE | 400 | Invalid task type |
-| 2003 | INPUT_FILE_EMPTY | 400 | No input file |
-| 2004 | UNSUPPORTED_FILE_TYPE | 400 | Bad file format |
-| 2006 | INVALID_ORIGINAL_TASK | 400 | Bad original task |
-| 2007 | ORIGINAL_TASK_NOT_SUCCESS | 400 | Original task not done |
-| 2008 | CONTENT_POLICY_VIOLATION | 400 | Content banned |
-| 2010 | INSUFFICIENT_CREDITS | 403 | No credits |
-| 2015 | DEPRECATED_VERSION | 400 | Version deprecated |
-| 2018 | MODEL_TOO_COMPLEX | 400 | Cannot remesh |
-
-#### Task Status Error Codes
-
-When polling returns `status: failed/banned/expired/cancelled`, the SDK reads `error_code` from response:
-
-| Status | Fallback SDK Code | Message |
-|--------|-------------------|---------|
-| failed | GENERATION_FAILED | Model generation failed |
-| banned | CONTENT_POLICY_VIOLATION | Content policy violation |
-| expired | TASK_EXPIRED | Task expired |
-| cancelled | TASK_CANCELED | Task was cancelled |
-
-### Hunyuan Error Handling
-
-Hunyuan uses Tencent Cloud Common Error Codes:
-
-| Hunyuan Code | SDK Error Code | Type |
-|--------------|----------------|------|
-| AuthFailure.SignatureExpire | SIGNATURE_EXPIRED | Auth |
-| AuthFailure.SignatureFailure | SIGNATURE_FAILURE | Auth |
-| AuthFailure.SecretIdNotFound | SECRET_ID_NOT_FOUND | Auth |
-| InvalidParameter | INVALID_PARAMETER | Param |
-| MissingParameter | MISSING_PARAMETER | Param |
-| RequestLimitExceeded | RATE_LIMIT_EXCEEDED | Rate |
-| ResourceNotFound | RESOURCE_NOT_FOUND | Resource |
-| InternalError | INTERNAL_ERROR | Service |
-| ServiceUnavailable | SERVICE_UNAVAILABLE | Service |
-
 ### Usage Example
 
 ```typescript
@@ -683,7 +742,7 @@ import { TaskError, ApiError, TaskStatus } from 'magi-3d/server';
 try {
   const taskId = await client.createTask(params);
   const result = await client.pollUntilDone(taskId);
-  console.log('Model URL:', result.result?.modelGlb);
+  console.log('Model URL:', result.result?.model);
 } catch (error) {
   if (error instanceof TaskError) {
     // Task failed during generation
@@ -713,6 +772,55 @@ if (task?.error) {
 }
 ```
 
+### Tripo Error Codes
+
+| Tripo Code | SDK Error Code | HTTP | Description |
+|------------|----------------|------|-------------|
+| 1000 | `SERVER_ERROR` | 500 | Server error |
+| 1001 | `FATAL_SERVER_ERROR` | 500 | Fatal server error |
+| 2000 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit hit |
+| 2001 | `TASK_NOT_FOUND` | 404 | Invalid task ID |
+| 2002 | `UNSUPPORTED_TASK_TYPE` | 400 | Invalid task type |
+| 2003 | `INPUT_FILE_EMPTY` | 400 | No input file |
+| 2004 | `UNSUPPORTED_FILE_TYPE` | 400 | Bad file format |
+| 2006 | `INVALID_ORIGINAL_TASK` | 400 | Bad original task |
+| 2007 | `ORIGINAL_TASK_NOT_SUCCESS` | 400 | Original task not done |
+| 2008 | `CONTENT_POLICY_VIOLATION` | 400 | Content banned |
+| 2010 | `INSUFFICIENT_CREDITS` | 403 | No credits |
+| 2015 | `DEPRECATED_VERSION` | 400 | Version deprecated |
+| 2018 | `MODEL_TOO_COMPLEX` | 400 | Cannot remesh |
+
+**Task Status Errors:**
+
+| Status | SDK Code | Description |
+|--------|----------|-------------|
+| failed | `GENERATION_FAILED` | Model generation failed |
+| banned | `CONTENT_POLICY_VIOLATION` | Content policy violation |
+| expired | `TASK_EXPIRED` | Task expired |
+| cancelled | `TASK_CANCELED` | Task was cancelled |
+
+### Hunyuan Error Codes
+
+| Hunyuan Code | SDK Error Code | Description |
+|--------------|----------------|-------------|
+| `AuthFailure.SignatureExpire` | `SIGNATURE_EXPIRED` | Signature expired |
+| `AuthFailure.SignatureFailure` | `SIGNATURE_FAILURE` | Invalid signature |
+| `AuthFailure.SecretIdNotFound` | `SECRET_ID_NOT_FOUND` | Secret ID not found |
+| `InvalidParameter` | `INVALID_PARAMETER` | Invalid parameter |
+| `MissingParameter` | `MISSING_PARAMETER` | Missing parameter |
+| `RequestLimitExceeded` | `RATE_LIMIT_EXCEEDED` | Rate limit exceeded |
+| `ResourceNotFound` | `RESOURCE_NOT_FOUND` | Resource not found |
+| `FailedOperation.*` | `OPERATION_FAILED` | Operation failed (retry) |
+| `InternalError` | `INTERNAL_ERROR` | Internal server error |
+| `ServiceUnavailable` | `SERVICE_UNAVAILABLE` | Service unavailable |
+
+**Task Status Errors:**
+
+| Status | SDK Code | Description |
+|--------|----------|-------------|
+| FAILED | `GENERATION_FAILED` | Model generation failed |
+| CANCELED | `TASK_CANCELED` | Task was cancelled |
+
 ---
 
 ## TypeScript Support
@@ -733,11 +841,26 @@ import {
   type HunyuanOptions
 } from 'magi-3d/server';
 
-import type {
-  UseCreateTaskOptions,
-  UseCreateTaskReturn
+import {
+  // Provider metadata
+  PROVIDERS,
+  PROVIDER_TASK_TYPES,
+
+  // Types
+  type UseCreateTaskOptions,
+  type UseCreateTaskReturn,
+  type UseTaskStatusOptions,
+  type UseTaskStatusReturn
 } from 'magi-3d/react';
 ```
+
+## Environment Variables
+
+| Variable | Provider | Description |
+|----------|----------|-------------|
+| `TRIPO_API_KEY` | Tripo | API key for Tripo |
+| `HUNYUAN_SECRET_ID` | Hunyuan | Tencent Cloud Secret ID |
+| `HUNYUAN_SECRET_KEY` | Hunyuan | Tencent Cloud Secret Key |
 
 ## E2E Testing
 

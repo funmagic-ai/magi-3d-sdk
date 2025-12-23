@@ -137,6 +137,8 @@ interface HunyuanApiResponse {
 interface TaskMetadata {
   taskType: TaskType;
   queryAction: string;
+  /** Raw API response for sync convert tasks */
+  syncConvertResponse?: HunyuanApiResponse['Response'];
 }
 
 // ============================================
@@ -232,10 +234,35 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
   /**
    * Creates a new HunyuanProvider instance.
    *
-   * @param config - Hunyuan API configuration
+   * @param config - Hunyuan API configuration. If secretId/secretKey are not provided,
+   *                 they will be read from HUNYUAN_SECRET_ID and HUNYUAN_SECRET_KEY
+   *                 environment variables.
+   *
+   * @example
+   * ```typescript
+   * // Using environment variables (process.env.HUNYUAN_SECRET_ID/KEY)
+   * const provider = new HunyuanProvider();
+   *
+   * // Or with explicit credentials
+   * const provider = new HunyuanProvider({
+   *   secretId: 'your-secret-id',
+   *   secretKey: 'your-secret-key',
+   *   region: 'ap-guangzhou'  // Optional
+   * });
+   * ```
    */
-  constructor(config: HunyuanConfig) {
-    super(config);
+  constructor(config: HunyuanConfig = {}) {
+    // Resolve credentials from config or environment variables
+    const secretId = config.secretId || process.env.HUNYUAN_SECRET_ID;
+    const secretKey = config.secretKey || process.env.HUNYUAN_SECRET_KEY;
+
+    if (!secretId || !secretKey) {
+      throw new Error(
+        'Hunyuan credentials are required. Provide secretId/secretKey via config or set HUNYUAN_SECRET_ID and HUNYUAN_SECRET_KEY environment variables.'
+      );
+    }
+
+    super({ ...config, secretId, secretKey });
 
     // Use regional endpoint or default
     this.host = config.endpoint || `ai3d.${config.region || 'ap-guangzhou'}.tencentcloudapi.com`;
@@ -283,10 +310,10 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     const payload = this.buildPayload(params);
     const payloadStr = JSON.stringify(payload);
 
-    // Sign the request
+    // Sign the request (credentials validated in constructor)
     const headers = TencentCloudSigner.sign({
-      secretId: this.config.secretId,
-      secretKey: this.config.secretKey,
+      secretId: this.config.secretId!,
+      secretKey: this.config.secretKey!,
       service: this.service,
       host: this.host,
       region: this.config.region || 'ap-guangzhou',
@@ -310,14 +337,13 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
 
     // Handle sync Convert3DFormat (returns result directly, no JobId)
     if (params.type === TaskType.CONVERT && apiResponse.ResultFile3D) {
-      // Create a synthetic task ID and store the result
+      // Create a synthetic task ID and store the result with raw response
       const syntheticId = `convert_${Date.now()}`;
-      // Store as completed in metadata
       this.taskMetadata.set(syntheticId, {
         taskType: TaskType.CONVERT,
-        queryAction: ''
+        queryAction: '',
+        syncConvertResponse: apiResponse
       });
-      // We'll handle this specially in getTaskStatus
       return syntheticId;
     }
 
@@ -363,10 +389,13 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
 
     // Texture
     if (isTextureParams(params)) {
+      if (!params.modelUrl) {
+        throw new Error('Hunyuan Texture requires modelUrl');
+      }
       const payload: Record<string, unknown> = {
         File3D: {
           Type: 'GLB',
-          Url: params.taskId // taskId should be the model URL for Hunyuan
+          Url: params.modelUrl
         }
       };
       if (params.prompt) {
@@ -383,10 +412,13 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
 
     // Decimate (ReduceFace)
     if (isDecimateParams(params)) {
+      if (!params.modelUrl) {
+        throw new Error('Hunyuan Decimate requires modelUrl');
+      }
       return {
         File3D: {
           Type: 'GLB',
-          Url: params.taskId
+          Url: params.modelUrl
         },
         ...(params.quad && { PolygonType: 'quadrilateral' }),
         ...options
@@ -395,20 +427,26 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
 
     // UV Unwrap
     if (isUVUnwrapParams(params)) {
+      if (!params.modelUrl) {
+        throw new Error('Hunyuan UV Unwrap requires modelUrl');
+      }
       return {
         File: {
           Type: 'GLB',
-          Url: params.modelUrl || params.taskId
+          Url: params.modelUrl
         }
       };
     }
 
     // Segment (Part Generation)
     if (isSegmentParams(params)) {
+      if (!params.modelUrl) {
+        throw new Error('Hunyuan Segment requires modelUrl');
+      }
       return {
         File: {
           Type: 'FBX',
-          Url: params.taskId
+          Url: params.modelUrl
         }
       };
     }
@@ -435,7 +473,6 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     if (options.GenerateType !== undefined) mapped.GenerateType = options.GenerateType;
     if (options.PolygonType !== undefined) mapped.PolygonType = options.PolygonType;
     if (options.ResultFormat !== undefined) mapped.ResultFormat = options.ResultFormat;
-    if (options.EnableGeometry !== undefined) mapped.EnableGeometry = options.EnableGeometry;
     if (options.FaceLevel !== undefined) mapped.FaceLevel = options.FaceLevel;
 
     return mapped;
@@ -448,14 +485,19 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     const metadata = this.taskMetadata.get(taskId);
 
     // Handle sync convert task (already completed)
-    if (taskId.startsWith('convert_')) {
+    if (taskId.startsWith('convert_') && metadata?.syncConvertResponse) {
+      const response = metadata.syncConvertResponse;
       return {
         id: taskId,
         provider: ProviderId.HUNYUAN,
         type: TaskType.CONVERT,
         status: TaskStatus.SUCCEEDED,
         progress: 100,
-        createdAt: Date.now()
+        result: response.ResultFile3D ? {
+          model: response.ResultFile3D
+        } : undefined,
+        createdAt: Date.now(),
+        rawResponse: response
       };
     }
 
@@ -465,9 +507,10 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
 
     const payload = JSON.stringify({ JobId: taskId });
 
+    // Credentials validated in constructor
     const headers = TencentCloudSigner.sign({
-      secretId: this.config.secretId,
-      secretKey: this.config.secretKey,
+      secretId: this.config.secretId!,
+      secretKey: this.config.secretKey!,
       service: this.service,
       host: this.host,
       region: this.config.region || 'ap-guangzhou',
@@ -513,34 +556,45 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     // Build result artifacts if task succeeded
     let result: TaskArtifacts | undefined;
     if (data.Status === 'DONE' && data.ResultFile3Ds && data.ResultFile3Ds.length > 0) {
-      result = {
-        modelGlb: '',
-        modelObj: undefined,
-        thumbnail: undefined
-      };
+      // Collect all format URLs
+      let glbUrl: string | undefined;
+      let objUrl: string | undefined;
+      let fbxUrl: string | undefined;
+      let thumbnailUrl: string | undefined;
 
       for (const file of data.ResultFile3Ds) {
         switch (file.Type.toUpperCase()) {
           case 'GLB':
-            result.modelGlb = file.Url;
+            glbUrl = file.Url;
             break;
           case 'OBJ':
-            result.modelObj = file.Url;
+            objUrl = file.Url;
             break;
           case 'FBX':
-            result.modelFbx = file.Url;
+            fbxUrl = file.Url;
             break;
           case 'IMAGE':
           case 'PREVIEW_IMAGE':
-            result.thumbnail = file.Url;
+            thumbnailUrl = file.Url;
             break;
         }
 
         // Also use PreviewImageUrl if available
         if (file.PreviewImageUrl) {
-          result.thumbnail = file.PreviewImageUrl;
+          thumbnailUrl = file.PreviewImageUrl;
         }
       }
+
+      // Primary model: GLB first, then OBJ, then FBX
+      const primaryModel = glbUrl || objUrl || fbxUrl || '';
+
+      result = {
+        model: primaryModel,
+        modelGlb: glbUrl,
+        modelObj: objUrl,
+        modelFbx: fbxUrl,
+        thumbnail: thumbnailUrl
+      };
     }
 
     // Build error object if task failed
@@ -572,7 +626,8 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
       progressDetail: data.Status,
       result,
       error,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      rawResponse: data
     };
   }
 }

@@ -74,8 +74,6 @@ export interface HunyuanOptions {
 
   /** Output format (rapid version) */
   ResultFormat?: 'OBJ' | 'GLB' | 'STL' | 'USDZ' | 'FBX' | 'MP4';
-  /** Generate white model without texture (default: false) */
-  EnableGeometry?: boolean;
 
   /** Multi-view support */
   MultiViewImages?: Array<{
@@ -144,8 +142,10 @@ export interface MultiviewTo3DParams<T = unknown> extends BaseTaskParams<T> {
  */
 export interface TextureParams<T = unknown> extends BaseTaskParams<T> {
   type: TaskType.TEXTURE;
-  /** Source task ID of the model to texture */
-  taskId: string;
+  /** Source task ID of the model to texture (Tripo) */
+  taskId?: string;
+  /** Direct model URL (Hunyuan - alternative to taskId) */
+  modelUrl?: RemoteUrl;
   /** Text prompt for texture generation */
   prompt?: string;
   /** Reference image URL for style */
@@ -198,8 +198,10 @@ export interface AnimateParams<T = unknown> extends BaseTaskParams<T> {
  */
 export interface SegmentParams<T = unknown> extends BaseTaskParams<T> {
   type: TaskType.SEGMENT;
-  /** Source task ID of the model to segment */
-  taskId: string;
+  /** Source task ID of the model to segment (Tripo) */
+  taskId?: string;
+  /** Direct model URL (Hunyuan - alternative to taskId) */
+  modelUrl?: RemoteUrl;
   /** Part names to segment (optional, defaults to all) */
   partNames?: string[];
 }
@@ -209,8 +211,10 @@ export interface SegmentParams<T = unknown> extends BaseTaskParams<T> {
  */
 export interface DecimateParams<T = unknown> extends BaseTaskParams<T> {
   type: TaskType.DECIMATE;
-  /** Source task ID of the model to decimate */
-  taskId: string;
+  /** Source task ID of the model to decimate (Tripo) */
+  taskId?: string;
+  /** Direct model URL (Hunyuan - alternative to taskId) */
+  modelUrl?: RemoteUrl;
   /** Target polygon/face count */
   targetFaceCount?: number;
   /** Use quad faces instead of triangles */

@@ -60,3 +60,6 @@ export type {
   TripoConfig,
   HunyuanConfig,
 } from './config';
+
+// Provider metadata (static, for frontend)
+export { PROVIDERS, PROVIDER_TASK_TYPES } from './providers';

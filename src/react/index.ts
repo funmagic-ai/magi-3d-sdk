@@ -68,5 +68,8 @@ export type {
 
 export {
   TaskStatus,
-  TaskType
+  TaskType,
+  ProviderId,
+  PROVIDERS,
+  PROVIDER_TASK_TYPES
 } from '../types';

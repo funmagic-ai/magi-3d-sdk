@@ -6,12 +6,32 @@
 import { TaskStatus, TaskType, ProviderId, RemoteUrl } from './enums';
 
 /**
- * Standard output artifacts from a 3D generation task
+ * Standard output artifacts from a 3D generation or post-processing task.
+ *
+ * @remarks
+ * The `model` field is always the primary output URL, regardless of task type or format.
+ * Use this for simple access to the main result.
+ *
+ * Format-specific fields (modelGlb, modelFbx, etc.) are populated when:
+ * - The provider returns explicit format information (e.g., Hunyuan)
+ * - Multiple formats are available from the same task
+ *
+ * @example
+ * ```typescript
+ * // Simple - always use model for primary output
+ * const url = result.result?.model;
+ *
+ * // Format-specific when needed
+ * const glb = result.result?.modelGlb;
+ * const fbx = result.result?.modelFbx;
+ * ```
  */
 export interface TaskArtifacts {
-  /** Primary GLB model URL (best available: pbr > standard > base) */
-  modelGlb: RemoteUrl;
+  /** Primary model URL - always the main output regardless of format or task type */
+  model: RemoteUrl;
 
+  /** GLB model URL (when format is known) */
+  modelGlb?: RemoteUrl;
   /** PBR model URL (with PBR materials, available when pbr=true) */
   modelPbr?: RemoteUrl;
   /** Base model URL (geometry without texture, available when texture=false) */
@@ -67,4 +87,11 @@ export interface StandardTask {
   createdAt: number;
   /** Task completion timestamp (milliseconds) */
   finishedAt?: number;
+
+  /**
+   * Raw response from the provider API.
+   * Useful for debugging or storing provider-specific data.
+   * Developer can decide whether to persist this.
+   */
+  rawResponse?: unknown;
 }

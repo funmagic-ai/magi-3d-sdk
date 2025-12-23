@@ -5,14 +5,20 @@
 
 import { useCallback } from 'react';
 import { usePolling, UsePollingOptions } from './usePolling';
-import type { StandardTask } from '../types';
+import type { StandardTask, ProviderId } from '../types';
 
-export interface UseTaskStatusOptions extends Omit<UsePollingOptions, 'api' | 'onSuccess'> {
+export interface UseTaskStatusOptions extends Omit<UsePollingOptions, 'api' | 'onSuccess' | 'providerId'> {
   /**
    * API endpoint for 3D tasks
    * @default '/api/3d'
    */
   api?: string;
+
+  /**
+   * Provider ID for the task.
+   * Required so the backend knows which provider to query for task status.
+   */
+  providerId: ProviderId;
 
   /**
    * Callback when task completes (any terminal state)
@@ -38,18 +44,24 @@ export interface UseTaskStatusReturn {
 }
 
 /**
- * React hook for polling task status
+ * React hook for polling task status.
  *
- * Use this when you already have a taskId and want to track its progress.
+ * Use this when you already have a taskId and providerId and want to track progress.
+ * The hook calls your backend API with taskId and providerId, allowing the backend
+ * to query the appropriate provider for task status.
  *
  * @example
  * ```tsx
- * import { useTaskStatus } from 'magi-3d/react';
+ * import { useTaskStatus, ProviderId } from 'magi-3d/react';
  *
- * function TaskTracker({ taskId }: { taskId: string }) {
+ * function TaskTracker({ taskId, providerId }: { taskId: string; providerId: ProviderId }) {
  *   const { task, progress, startPolling } = useTaskStatus({
  *     api: '/api/3d',
- *     onComplete: (task) => console.log('Done!', task)
+ *     providerId,
+ *     onComplete: (task) => {
+ *       console.log('Done!', task);
+ *       // Developer can store task.rawResponse in DB if needed
+ *     }
  *   });
  *
  *   useEffect(() => {
@@ -60,9 +72,10 @@ export interface UseTaskStatusReturn {
  * }
  * ```
  */
-export function useTaskStatus(options: UseTaskStatusOptions = {}): UseTaskStatusReturn {
+export function useTaskStatus(options: UseTaskStatusOptions): UseTaskStatusReturn {
   const {
     api = '/api/3d',
+    providerId,
     onComplete,
     ...pollingOptions
   } = options;
@@ -81,6 +94,7 @@ export function useTaskStatus(options: UseTaskStatusOptions = {}): UseTaskStatus
 
   const polling = usePolling({
     api,
+    providerId,
     onSuccess: handleSuccess,
     onError: handleError,
     ...pollingOptions

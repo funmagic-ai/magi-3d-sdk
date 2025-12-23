@@ -79,7 +79,7 @@ describe('useCreateTask', () => {
           id: 'new-task-id',
           status: TaskStatus.SUCCEEDED,
           progress: 100,
-          result: { modelGlb: 'https://example.com/model.glb' }
+          result: { model: 'https://example.com/model.glb', modelGlb: 'https://example.com/model.glb' }
         }))
       });
 

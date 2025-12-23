@@ -33,6 +33,7 @@ class MockProvider extends AbstractProvider {
       status: TaskStatus.SUCCEEDED,
       progress: 100,
       result: {
+        model: 'https://example.com/model.glb',
         modelGlb: 'https://example.com/model.glb',
         thumbnail: 'https://example.com/thumb.png'
       },

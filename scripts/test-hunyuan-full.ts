@@ -22,18 +22,18 @@ import { config } from 'dotenv';
 
 config();
 
-const SECRET_ID = process.env.TENCENT_SECRET_ID;
-const SECRET_KEY = process.env.TENCENT_SECRET_KEY;
+const SECRET_ID = process.env.HUNYUAN_SECRET_ID;
+const SECRET_KEY = process.env.HUNYUAN_SECRET_KEY;
 
 if (!SECRET_ID || !SECRET_KEY) {
-  console.error('Error: TENCENT_SECRET_ID and TENCENT_SECRET_KEY environment variables are required');
+  console.error('Error: HUNYUAN_SECRET_ID and HUNYUAN_SECRET_KEY environment variables are required');
   process.exit(1);
 }
 
 // Test configuration
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOCAL_IMAGE_PATH = resolve(__dirname, 'image.png');
-const TEST_IMAGE_URL = 'https://tripo-data.cdn.bcebos.com/frontend/media/images/examples/trex.jpg';
+const TEST_IMAGE_URL = 'https://cdn.i.haymarketmedia.asia/?n=campaign-asia%2Fcontent%2F20241030094458_Untitled+design+(5).jpg&h=570&w=855&q=100&v=20250320&c=1';
 
 const POLL_OPTIONS = {
   interval: 5000,
@@ -63,14 +63,19 @@ function imageToBase64(imagePath: string): string {
 function printResult(result: StandardTask) {
   console.log('\n   Result:');
   console.log(`     Status: ${result.status}`);
+  if (result.result?.model) console.log(`     Model (primary): ${result.result.model.substring(0, 80)}...`);
   if (result.result?.modelGlb) console.log(`     GLB: ${result.result.modelGlb.substring(0, 80)}...`);
   if (result.result?.modelPbr) console.log(`     PBR: ${result.result.modelPbr.substring(0, 80)}...`);
   if (result.result?.thumbnail) console.log(`     Thumbnail: ${result.result.thumbnail.substring(0, 80)}...`);
+  if (result.rawResponse) {
+    console.log('     Raw Response:');
+    console.log(JSON.stringify(result.rawResponse, null, 2).split('\n').map(l => '       ' + l).join('\n'));
+  }
   if (result.error) {
     console.log(`     Error Code: ${result.error.code}`);
     console.log(`     Error Message: ${result.error.message}`);
     if (result.error.raw) {
-      console.log('     Raw Response:');
+      console.log('     Error Raw Response:');
       console.log(JSON.stringify(result.error.raw, null, 2).split('\n').map(l => '       ' + l).join('\n'));
     }
   }
@@ -154,15 +159,15 @@ const tests: TestCase[] = [
   {
     name: 'text-to-3d-geometry',
     run: async (client) => {
-      console.log('\n[TEST] Text-to-3D - Geometry Only (No Texture)');
+      console.log('\n[TEST] Text-to-3D - Geometry Mode (White Model)');
       console.log('   Prompt: "一个茶壶" (a teapot)');
-      console.log('   Options: EnableGeometry=true');
+      console.log('   Options: GenerateType=Geometry');
 
       const taskId = await client.createTask({
         type: TaskType.TEXT_TO_3D,
         prompt: '一个茶壶',
         providerOptions: {
-          EnableGeometry: true
+          GenerateType: 'Geometry'
         }
       });
       console.log(`   Task ID: ${taskId}`);
@@ -310,7 +315,7 @@ const pipelineTests: TestCase[] = [
 
       const decimateTaskId = await client.createTask({
         type: TaskType.DECIMATE,
-        taskId: baseTaskId,
+        modelUrl,  // Hunyuan requires model URL, not task ID
         providerOptions: {
           FaceLevel: 'low'
         }
@@ -328,15 +333,16 @@ const pipelineTests: TestCase[] = [
     run: async (client) => {
       console.log('\n[TEST] Texture Pipeline - Geometry → Add Texture');
 
-      // Step 1: Create geometry-only model
-      console.log('\n   Step 1: Text-to-3D (Geometry Only)');
+      // Step 1: Create geometry-only model using GenerateType: 'Geometry'
+      console.log('\n   Step 1: Text-to-3D (Geometry Mode)');
       console.log('   Prompt: "一把武士刀" (a samurai sword)');
+      console.log('   Options: GenerateType=Geometry');
 
       const baseTaskId = await client.createTask({
         type: TaskType.TEXT_TO_3D,
         prompt: '一把武士刀',
         providerOptions: {
-          EnableGeometry: true
+          GenerateType: 'Geometry'
         }
       });
       console.log(`   Task ID: ${baseTaskId}`);
@@ -348,13 +354,20 @@ const pipelineTests: TestCase[] = [
       }
       console.log('\n   ✓ Geometry model created');
 
+      // Get model URL for texture task
+      const modelUrl = baseResult.result?.model;
+      if (!modelUrl) {
+        console.log('   ✗ No model URL returned');
+        return { passed: false };
+      }
+
       // Step 2: Add texture
       console.log('\n   Step 2: Add Texture');
       console.log('   Prompt: "golden blade with black handle"');
 
       const textureTaskId = await client.createTask({
         type: TaskType.TEXTURE,
-        taskId: baseTaskId,
+        modelUrl,  // Hunyuan requires model URL, not task ID
         prompt: 'golden blade with black handle'
       });
       console.log(`   Task ID: ${textureTaskId}`);

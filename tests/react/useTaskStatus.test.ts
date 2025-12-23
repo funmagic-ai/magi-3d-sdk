@@ -48,7 +48,7 @@ describe('useTaskStatus', () => {
   describe('initial state', () => {
     it('should have correct initial values', () => {
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d' })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO })
       );
 
       expect(result.current.task).toBeNull();
@@ -67,7 +67,7 @@ describe('useTaskStatus', () => {
       mockFetchSuccess(task);
 
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d' })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO })
       );
 
       act(() => {
@@ -84,7 +84,7 @@ describe('useTaskStatus', () => {
       expect(result.current.progress).toBe(60);
 
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/3d/task/existing-task-id',
+        '/api/3d/task/existing-task-id?providerId=tripo',
         expect.objectContaining({
           method: 'GET'
         })
@@ -95,13 +95,13 @@ describe('useTaskStatus', () => {
       const successTask = createMockTask({
         status: TaskStatus.SUCCEEDED,
         progress: 100,
-        result: { modelGlb: 'https://example.com/model.glb' }
+        result: { model: 'https://example.com/model.glb', modelGlb: 'https://example.com/model.glb' }
       });
       mockFetchSuccess(successTask);
 
       const onComplete = vi.fn();
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d', onComplete })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO, onComplete })
       );
 
       act(() => {
@@ -115,7 +115,7 @@ describe('useTaskStatus', () => {
       expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
         status: TaskStatus.SUCCEEDED,
         result: expect.objectContaining({
-          modelGlb: 'https://example.com/model.glb'
+          model: 'https://example.com/model.glb'
         })
       }));
     });
@@ -129,7 +129,7 @@ describe('useTaskStatus', () => {
 
       const onError = vi.fn();
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d', onError })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO, onError })
       );
 
       act(() => {
@@ -155,7 +155,7 @@ describe('useTaskStatus', () => {
 
       const onProgress = vi.fn();
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d', pollingInterval: 1000, onProgress })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO, pollingInterval: 1000, onProgress })
       );
 
       act(() => {
@@ -193,7 +193,7 @@ describe('useTaskStatus', () => {
       mockFetchSuccess(task);
 
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d', pollingInterval: 1000 })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO, pollingInterval: 1000 })
       );
 
       act(() => {
@@ -223,7 +223,7 @@ describe('useTaskStatus', () => {
       mockFetchSuccess(task2);
 
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d' })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO })
       );
 
       // Start polling and stop to set taskId
@@ -257,7 +257,7 @@ describe('useTaskStatus', () => {
       mockFetchSuccess(task);
 
       const { result } = renderHook(() =>
-        useTaskStatus() // No api option
+        useTaskStatus({ providerId: ProviderId.TRIPO }) // Only providerId required
       );
 
       act(() => {
@@ -266,7 +266,7 @@ describe('useTaskStatus', () => {
 
       await waitFor(() => {
         expect(mockFetch).toHaveBeenCalledWith(
-          '/api/3d/task/test-task-id',
+          '/api/3d/task/test-task-id?providerId=tripo',
           expect.any(Object)
         );
       });
@@ -282,7 +282,7 @@ describe('useTaskStatus', () => {
 
       const onError = vi.fn();
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d', onError })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO, onError })
       );
 
       act(() => {
@@ -307,7 +307,7 @@ describe('useTaskStatus', () => {
       mockFetchSuccess(task2);
 
       const { result } = renderHook(() =>
-        useTaskStatus({ api: '/api/3d', pollingInterval: 5000 })
+        useTaskStatus({ api: '/api/3d', providerId: ProviderId.TRIPO, pollingInterval: 5000 })
       );
 
       act(() => {
@@ -342,6 +342,7 @@ describe('useTaskStatus', () => {
       const { result } = renderHook(() =>
         useTaskStatus({
           api: '/api/3d',
+          providerId: ProviderId.TRIPO,
           headers: { 'Authorization': 'Bearer my-token' }
         })
       );

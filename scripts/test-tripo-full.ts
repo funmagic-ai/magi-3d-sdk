@@ -26,7 +26,7 @@ if (!API_KEY) {
 }
 
 // Test configuration
-const TEST_IMAGE_URL = 'https://tripo-data.rg1.data.tripo3d.com/tripo-studio/20251212/6a2ac8cc-900c-4c29-a131-e43e3ce913ff/523e7273-9dff-4085-bd8f-c8e136859a41.png?Key-Pair-Id=K1676C64NMVM2J&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly90cmlwby1kYXRhLnJnMS5kYXRhLnRyaXBvM2QuY29tL3RyaXBvLXN0dWRpby8yMDI1MTIxMi82YTJhYzhjYy05MDBjLTRjMjktYTEzMS1lNDNlM2NlOTEzZmYvNTIzZTcyNzMtOWRmZi00MDg1LWJkOGYtYzhlMTM2ODU5YTQxLnBuZyIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc2NTkyOTYwMH19fV19&Signature=NNQR9IK1IPAXnVHYFE7nyxWQCZ1p~6leHKSKtL-dlvW6spYPcHl~FxZAiIOJfa7-bpq~lJ3m2~HUnGksTPIo~NmOrmXySzyoxvIIbdnFVPiiYBAt9zge2glPMntqKdFbBcbEbE72qW4l9R0otrKpTwDYaLV~pTq5chHE~VNAh4YuMt4Yv7TJcYfQOjR1dKudwZxCh9NnF7AXityT9N1aSJhZoeYv1Bod~eUNNPuKS0Tnsnh68JQQhoZDz3trR9LNryQzspIAaPuBuFeOnc13uOLm1DvD6OqsCZGIpDjfBVfMHYPRDsR9G4hR2ACo2H9O9JHlBOi0TxxWWfC-10RxOg__';
+const TEST_IMAGE_URL = 'https://cdn.i.haymarketmedia.asia/?n=campaign-asia%2Fcontent%2F20241030094458_Untitled+design+(5).jpg&h=570&w=855&q=100&v=20250320&c=1';
 const POLL_OPTIONS = {
   interval: 3000,
   timeout: 300000,
@@ -41,14 +41,19 @@ const POLL_OPTIONS = {
 function printResult(result: StandardTask) {
   console.log('\n   Result:');
   console.log(`     Status: ${result.status}`);
+  if (result.result?.model) console.log(`     Model (primary): ${result.result.model.substring(0, 80)}...`);
   if (result.result?.modelGlb) console.log(`     GLB: ${result.result.modelGlb.substring(0, 80)}...`);
   if (result.result?.modelPbr) console.log(`     PBR: ${result.result.modelPbr.substring(0, 80)}...`);
   if (result.result?.thumbnail) console.log(`     Thumbnail: ${result.result.thumbnail.substring(0, 80)}...`);
+  if (result.rawResponse) {
+    console.log('     Raw Response:');
+    console.log(JSON.stringify(result.rawResponse, null, 2).split('\n').map(l => '       ' + l).join('\n'));
+  }
   if (result.error) {
     console.log(`     Error Code: ${result.error.code}`);
     console.log(`     Error Message: ${result.error.message}`);
     if (result.error.raw) {
-      console.log('     Raw Response:');
+      console.log('     Error Raw Response:');
       console.log(JSON.stringify(result.error.raw, null, 2).split('\n').map(l => '       ' + l).join('\n'));
     }
   }

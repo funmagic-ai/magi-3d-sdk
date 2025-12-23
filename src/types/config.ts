@@ -20,26 +20,28 @@ export interface ProviderConfig {
 }
 
 /**
- * Configuration for Tripo provider
+ * Configuration for Tripo provider.
+ * If apiKey is not provided, it will be read from TRIPO_API_KEY environment variable.
  * @see https://platform.tripo3d.ai/docs
  */
 export interface TripoConfig extends ProviderConfig {
-  /** Tripo API key (required) */
-  apiKey: string;
+  /** Tripo API key. Falls back to process.env.TRIPO_API_KEY if not provided. */
+  apiKey?: string;
   /** Custom API base URL (default: https://api.tripo3d.ai) */
   baseUrl?: string;
 }
 
 /**
- * Configuration for Hunyuan (Tencent Cloud) provider
- * Uses Tencent Cloud's TC3-HMAC-SHA256 authentication
+ * Configuration for Hunyuan (Tencent Cloud) provider.
+ * Uses Tencent Cloud's TC3-HMAC-SHA256 authentication.
+ * If credentials are not provided, they will be read from environment variables.
  * @see https://cloud.tencent.com/document/product/...
  */
 export interface HunyuanConfig extends ProviderConfig {
-  /** Tencent Cloud Secret ID (required) */
-  secretId: string;
-  /** Tencent Cloud Secret Key (required) */
-  secretKey: string;
+  /** Tencent Cloud Secret ID. Falls back to process.env.HUNYUAN_SECRET_ID if not provided. */
+  secretId?: string;
+  /** Tencent Cloud Secret Key. Falls back to process.env.HUNYUAN_SECRET_KEY if not provided. */
+  secretKey?: string;
   /** Service region (default: ap-guangzhou) */
   region?: string;
   /** Custom API endpoint */
