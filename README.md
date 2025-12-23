@@ -178,7 +178,7 @@ The raw Hunyuan status is available in `task.progressDetail` for debugging.
 - `MULTIVIEW_TO_3D` - Generate from multiple views (Pro only)
 - `TEXTURE` - Add texture to geometry
 - `DECIMATE` - Reduce face count 
-- `UV_UNWRAP` - UV展开
+- `UV_UNWRAP` - UV Unwrap
 - `SEGMENT` - Component generation 
 - `CONVERT` - Format conversion (sync)
 
