@@ -35,5 +35,8 @@ hunyuan.md
 tripo.md
 AISDK.md
 
+# Tripo raw API docs (contains example AWS credentials)
+tripo/
+
 #models
 *.glb
