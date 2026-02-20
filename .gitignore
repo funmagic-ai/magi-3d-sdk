@@ -26,8 +26,9 @@ coverage/
 npm-debug.log*
 pnpm-debug.log*
 
-# TypeDoc output
-docs/
+# TypeDoc output (except guides/)
+docs/*
+!docs/guides/
 
 #design documents
 sdk-design.md
