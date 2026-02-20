@@ -7,6 +7,7 @@ import axios, { AxiosInstance } from 'axios';
 import { AbstractProvider, ImageInput } from '../core/AbstractProvider';
 import { ApiError } from '../core/Magi3DClient';
 import { InputUtils } from '../utils/InputUtils';
+import { uploadToS3 } from '../utils/s3-upload';
 import {
   TaskParams,
   StandardTask,
@@ -19,13 +20,19 @@ import {
   isTextTo3DParams,
   isImageTo3DParams,
   isMultiviewTo3DParams,
+  isTextToImageParams,
+  isGenerateImageParams,
   isTextureParams,
+  isRefineParams,
   isRigParams,
   isAnimateParams,
   isSegmentParams,
+  isMeshCompletionParams,
   isDecimateParams,
   isConvertParams,
-  isImportParams
+  isImportParams,
+  isPreRigCheckParams,
+  isStylizeParams
 } from '../types';
 
 // ============================================
@@ -55,14 +62,47 @@ interface TripoTaskData {
   // Error code present when status is failed/banned/expired/cancelled/unknown
   error_code?: number;
   output?: {
-    // Success fields
+    // Model output fields
     model?: string;
     pbr_model?: string;
     base_model?: string;
     rendered_image?: string;
     generated_video?: string;
+    // Image generation output
+    generated_image?: string;
+    // Pre-rig check output
+    riggable?: boolean;
+    rig_type?: string;
   };
 }
+
+/**
+ * Tripo STS token response
+ * @internal
+ */
+interface TripoStsTokenData {
+  s3_host: string;
+  resource_bucket: string;
+  resource_uri: string;
+  session_token: string;
+  sts_ak: string;
+  sts_sk: string;
+}
+
+/**
+ * Resolved file reference for Tripo API payloads.
+ * Exactly one of file_token, url, or object should be present.
+ * @internal
+ */
+interface TripoFileRef {
+  type: string;
+  file_token?: string;
+  url?: string;
+  object?: { bucket: string; key: string };
+}
+
+/** Image extensions accepted by Tripo Direct Upload */
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 
 /**
  * Tripo error code ranges:
@@ -74,6 +114,8 @@ const TRIPO_ERROR_CODE_MAP: Record<number, string> = {
   // 1xxx - Request/Server errors
   1000: 'SERVER_ERROR',
   1001: 'FATAL_SERVER_ERROR',
+  1004: 'INVALID_PARAMETER',
+  1005: 'ACCESS_DENIED',
   // 2xxx - Task generation errors
   2000: 'RATE_LIMIT_EXCEEDED',
   2001: 'TASK_NOT_FOUND',
@@ -84,8 +126,12 @@ const TRIPO_ERROR_CODE_MAP: Record<number, string> = {
   2007: 'ORIGINAL_TASK_NOT_SUCCESS',
   2008: 'CONTENT_POLICY_VIOLATION',
   2010: 'INSUFFICIENT_CREDITS',
+  2014: 'AUDIT_SERVICE_ERROR',
   2015: 'DEPRECATED_VERSION',
-  2018: 'MODEL_TOO_COMPLEX'
+  2016: 'DEPRECATED_TASK_TYPE',
+  2017: 'INVALID_MODEL_VERSION',
+  2018: 'MODEL_TOO_COMPLEX',
+  2019: 'FILE_NOT_FOUND'
 };
 
 // ============================================
@@ -170,6 +216,9 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
   /** Axios HTTP client instance */
   private client: AxiosInstance;
 
+  /** Whether STS upload is enabled for file inputs */
+  private stsUploadEnabled: boolean;
+
   /**
    * Creates a new TripoProvider instance.
    *
@@ -201,6 +250,8 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
 
     super({ ...config, apiKey });
 
+    this.stsUploadEnabled = config.stsUpload ?? false;
+
     this.client = axios.create({
       baseURL: config.baseUrl || 'https://api.tripo3d.ai',
       headers: {
@@ -214,37 +265,230 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
     this.supportedTaskTypes.add(TaskType.TEXT_TO_3D);
     this.supportedTaskTypes.add(TaskType.IMAGE_TO_3D);
     this.supportedTaskTypes.add(TaskType.MULTIVIEW_TO_3D);
+    this.supportedTaskTypes.add(TaskType.TEXT_TO_IMAGE);
+    this.supportedTaskTypes.add(TaskType.GENERATE_IMAGE);
     this.supportedTaskTypes.add(TaskType.TEXTURE);
     this.supportedTaskTypes.add(TaskType.REFINE);
+    this.supportedTaskTypes.add(TaskType.PRE_RIG_CHECK);
     this.supportedTaskTypes.add(TaskType.RIG);
     this.supportedTaskTypes.add(TaskType.ANIMATE);
     this.supportedTaskTypes.add(TaskType.SEGMENT);
+    this.supportedTaskTypes.add(TaskType.MESH_COMPLETION);
     this.supportedTaskTypes.add(TaskType.DECIMATE);
     this.supportedTaskTypes.add(TaskType.CONVERT);
     this.supportedTaskTypes.add(TaskType.IMPORT);
+    this.supportedTaskTypes.add(TaskType.STYLIZE);
   }
 
   /**
    * Prepares input for the Tripo API.
    *
-   * @remarks
-   * Tripo currently only accepts URL inputs directly. For base64 data,
-   * use the Tripo upload API first to get a file_token, then use the URL.
+   * When stsUpload is enabled, local inputs (file paths, localhost URLs, base64)
+   * are accepted and will be uploaded in the payload builder.
+   * When disabled, only public URLs are accepted.
    *
-   * @param input - Image input (must be a URL)
-   * @returns The validated URL
-   *
-   * @throws Error if input is not a URL
+   * @param input - Image input (URL, file path, or base64 when stsUpload enabled)
+   * @returns The input string (passed through for later processing)
    */
   protected async prepareInput(input: ImageInput): Promise<string> {
     if (InputUtils.isUrl(input)) {
       return input;
     }
 
+    if (this.stsUploadEnabled) {
+      return input;
+    }
+
     throw new Error(
-      'TripoProvider requires URL inputs. For base64 data, upload the image first ' +
-      'using the Tripo upload API, then provide the resulting URL.'
+      'TripoProvider requires URL inputs. Enable stsUpload in TripoConfig to use ' +
+      'local file paths, localhost URLs, or base64 data.'
     );
+  }
+
+  // ============================================
+  // File Upload Methods
+  // ============================================
+
+  /**
+   * Checks if an input string refers to a local resource that cannot be
+   * downloaded by Tripo's servers (localhost, file path, base64).
+   * @internal
+   */
+  private isLocalInput(input: string): boolean {
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?/i.test(input)) return true;
+    if (input.startsWith('file://')) return true;
+    if (input.startsWith('/') || input.startsWith('./') || input.startsWith('../')) return true;
+    if (input.startsWith('data:')) return true;
+    if (input.length >= 100 && /^[A-Za-z0-9+/]+=*$/.test(input)) return true;
+    return false;
+  }
+
+  /**
+   * Detects file extension from a URL, file path, or data URI.
+   * Falls back to the provided default or 'jpg'.
+   * @internal
+   */
+  private detectFileExt(input: string, defaultExt = 'jpg'): string {
+    // data URI: data:image/png;base64,...
+    const dataMatch = input.match(/^data:(?:image|model|application)\/([a-zA-Z0-9.+-]+);/);
+    if (dataMatch) {
+      const mime = dataMatch[1].toLowerCase();
+      return mime === 'jpeg' ? 'jpg' : mime;
+    }
+
+    // URL or file path: extract extension
+    try {
+      const pathname = input.startsWith('http') ? new URL(input).pathname : input;
+      const ext = pathname.split('.').pop()?.toLowerCase()?.split('?')[0];
+      if (ext && ext.length <= 5 && ext !== pathname.toLowerCase()) {
+        return ext === 'jpeg' ? 'jpg' : ext;
+      }
+    } catch { /* ignore parse errors */ }
+
+    return defaultExt;
+  }
+
+  /**
+   * Fetches content from a URL or reads from a file path.
+   * Works with both public and localhost URLs since it runs locally.
+   * @internal
+   */
+  private async fetchContent(input: string): Promise<Buffer> {
+    // Base64 data URI
+    if (input.startsWith('data:')) {
+      const base64Data = input.replace(/^data:[^;]+;base64,/, '');
+      return Buffer.from(base64Data, 'base64');
+    }
+
+    // Raw base64
+    if (input.length >= 100 && /^[A-Za-z0-9+/]+=*$/.test(input)) {
+      return Buffer.from(input, 'base64');
+    }
+
+    // file:// protocol
+    if (input.startsWith('file://')) {
+      const { readFile } = await import('fs/promises');
+      return readFile(input.replace(/^file:\/\//, ''));
+    }
+
+    // Local file path
+    if (input.startsWith('/') || input.startsWith('./') || input.startsWith('../')) {
+      const { readFile } = await import('fs/promises');
+      return readFile(input);
+    }
+
+    // HTTP(S) URL — works for both public and localhost
+    const response = await axios.get(input, { responseType: 'arraybuffer' });
+    return Buffer.from(response.data);
+  }
+
+  /**
+   * Uploads an image via Direct Upload (multipart/form-data).
+   * @returns The image_token from Tripo
+   * @internal
+   */
+  private async directUploadImage(data: Buffer, filename: string): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(data)]), filename);
+
+    const response = await this.client.post<TripoApiResponse<{ image_token: string }>>(
+      '/v2/openapi/upload/sts',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+
+    if (response.data.code !== 0) {
+      throw this.createTripoError(response.data.code, response.data.message, response.data);
+    }
+
+    return response.data.data.image_token;
+  }
+
+  /**
+   * Uploads a file via STS Upload (get token + S3 PUT).
+   * Used for 3D models and other non-image files.
+   * @returns S3 object reference { bucket, key }
+   * @internal
+   */
+  private async stsUploadFile(data: Buffer, format: string): Promise<{ bucket: string; key: string }> {
+    // Step 1: Get STS token
+    const tokenResponse = await this.client.post<TripoApiResponse<TripoStsTokenData>>(
+      '/v2/openapi/upload/sts/token',
+      { format }
+    );
+
+    if (tokenResponse.data.code !== 0) {
+      throw this.createTripoError(
+        tokenResponse.data.code, tokenResponse.data.message, tokenResponse.data
+      );
+    }
+
+    const {
+      s3_host, resource_bucket, resource_uri,
+      session_token, sts_ak, sts_sk
+    } = tokenResponse.data.data;
+
+    // Extract region from s3_host (e.g., "s3.us-west-2.amazonaws.com" → "us-west-2")
+    const regionMatch = s3_host.match(/s3\.([^.]+)\.amazonaws\.com/);
+    const region = regionMatch?.[1] || 'us-west-2';
+
+    // Step 2: Upload to S3
+    await uploadToS3({
+      host: s3_host,
+      bucket: resource_bucket,
+      key: resource_uri,
+      accessKeyId: sts_ak,
+      secretAccessKey: sts_sk,
+      sessionToken: session_token,
+      body: data,
+      region
+    });
+
+    return { bucket: resource_bucket, key: resource_uri };
+  }
+
+  /**
+   * Resolves a file input string to a Tripo file reference object.
+   *
+   * When stsUpload is enabled: fetches/reads the content and uploads it.
+   *   - Images → Direct Upload → { type, file_token }
+   *   - 3D models → STS Upload → { type, object: { bucket, key } }
+   *
+   * When stsUpload is disabled: wraps the URL in a file reference.
+   *   - Public URLs → { type, url }
+   *   - Local inputs → throws error
+   *
+   * @param input - URL, file path, or base64 data
+   * @param defaultExt - Default file extension if detection fails
+   * @returns File reference for use in API payloads
+   * @internal
+   */
+  private async resolveFileRef(input: string, defaultExt = 'jpg'): Promise<TripoFileRef> {
+    const ext = this.detectFileExt(input, defaultExt);
+
+    if (this.stsUploadEnabled) {
+      const content = await this.fetchContent(input);
+
+      if (IMAGE_EXTS.has(ext)) {
+        // Direct Upload for images
+        const fileToken = await this.directUploadImage(content, `upload.${ext}`);
+        return { type: ext, file_token: fileToken };
+      } else {
+        // STS Upload for 3D models and other files
+        const obj = await this.stsUploadFile(content, ext);
+        return { type: ext, object: obj };
+      }
+    }
+
+    // stsUpload disabled: only public URLs allowed
+    if (this.isLocalInput(input)) {
+      throw new Error(
+        'Local file inputs (localhost URLs, file paths, base64) require stsUpload to be enabled. ' +
+        'Set { stsUpload: true } in your TripoProvider config.'
+      );
+    }
+
+    return { type: ext, url: input };
   }
 
   /**
@@ -256,7 +500,7 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
    * @throws Error if API request fails (HTTP 4xx/5xx or code !== 0)
    */
   protected async doCreateTask(params: TaskParams<TripoOptions>): Promise<string> {
-    const payload = this.buildPayload(params);
+    const payload = await this.buildPayload(params);
 
     try {
       const response = await this.client.post<TripoApiResponse<{ task_id: string }>>(
@@ -305,11 +549,12 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
 
   /**
    * Builds the Tripo API payload based on task type.
+   * Async because file inputs may need to be uploaded when stsUpload is enabled.
    *
    * @param params - Task parameters
    * @returns API payload object
    */
-  private buildPayload(params: TaskParams<TripoOptions>): Record<string, unknown> {
+  private async buildPayload(params: TaskParams<TripoOptions>): Promise<Record<string, unknown>> {
     const options = params.providerOptions || {};
 
     // Text-to-3D
@@ -326,22 +571,23 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
     if (isImageTo3DParams(params)) {
       return {
         type: 'image_to_model',
-        file: {
-          type: 'jpg',
-          url: params.input
-        },
+        file: await this.resolveFileRef(params.input),
         ...options
       };
     }
 
     // Multi-view to 3D (Tripo does not support prompt for multiview_to_model)
+    // API expects exactly 4 elements [front, left, back, right].
+    // Omitted views must be empty objects {}, not filtered out.
     if (isMultiviewTo3DParams(params)) {
+      const files = await Promise.all(
+        params.inputs.map(async (url) =>
+          url ? await this.resolveFileRef(url) : {}
+        )
+      );
       return {
         type: 'multiview_to_model',
-        files: params.inputs.map((url) => ({
-          type: 'jpg',
-          url: url || undefined
-        })).filter(f => f.url),
+        files,
         ...options
       };
     }
@@ -352,11 +598,15 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
         type: 'texture_model',
         original_model_task_id: params.taskId
       };
+      const texturePrompt: Record<string, unknown> = {};
       if (params.prompt) {
-        payload.texture_prompt = { text: params.prompt };
+        texturePrompt.text = params.prompt;
       }
       if (params.styleImage) {
-        payload.style_image = { url: params.styleImage };
+        texturePrompt.style_image = await this.resolveFileRef(params.styleImage);
+      }
+      if (Object.keys(texturePrompt).length > 0) {
+        payload.texture_prompt = texturePrompt;
       }
       if (params.enablePBR !== undefined) {
         payload.pbr = params.enablePBR;
@@ -392,7 +642,6 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
       return {
         type: 'mesh_segmentation',
         original_model_task_id: params.taskId,
-        ...(params.partNames && { part_names: params.partNames }),
         ...options
       };
     }
@@ -425,6 +674,15 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
 
     // Import
     if (isImportParams(params)) {
+      if (this.stsUploadEnabled) {
+        const ext = this.detectFileExt(params.input, 'glb');
+        return {
+          type: 'import_model',
+          file: await this.resolveFileRef(params.input, ext),
+          ...options
+        };
+      }
+      // Without stsUpload: input is an existing S3 key
       return {
         type: 'import_model',
         file: {
@@ -437,12 +695,72 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
       };
     }
 
-    // Refine (default case for refine_model)
-    return {
-      type: 'refine_model',
-      original_model_task_id: (params as { taskId: string }).taskId,
-      ...options
-    };
+    // Text to Image
+    if (isTextToImageParams(params)) {
+      return {
+        type: 'text_to_image',
+        prompt: params.prompt,
+        ...(params.negative_prompt && { negative_prompt: params.negative_prompt }),
+        ...options
+      };
+    }
+
+    // Advanced Generate Image
+    if (isGenerateImageParams(params)) {
+      const payload: Record<string, unknown> = {
+        type: 'generate_image',
+        prompt: params.prompt
+      };
+      if (params.input) {
+        payload.file = await this.resolveFileRef(params.input);
+      }
+      if (params.inputs && params.inputs.length > 0) {
+        payload.files = await Promise.all(
+          params.inputs.map((url) => this.resolveFileRef(url))
+        );
+      }
+      return { ...payload, ...options };
+    }
+
+    // Mesh Completion
+    if (isMeshCompletionParams(params)) {
+      return {
+        type: 'mesh_completion',
+        original_model_task_id: params.taskId,
+        ...(params.partNames && { part_names: params.partNames }),
+        ...options
+      };
+    }
+
+    // Pre-Rig Check
+    if (isPreRigCheckParams(params)) {
+      return {
+        type: 'animate_prerigcheck',
+        original_model_task_id: params.taskId,
+        ...options
+      };
+    }
+
+    // Stylize
+    if (isStylizeParams(params)) {
+      return {
+        type: 'stylize_model',
+        original_model_task_id: params.taskId,
+        style: params.style,
+        ...options
+      };
+    }
+
+    // Refine
+    if (isRefineParams(params)) {
+      return {
+        type: 'refine_model',
+        draft_model_task_id: params.taskId,
+        ...options
+      };
+    }
+
+    throw new Error(`Unsupported task type: ${params.type}`);
   }
 
   /**
@@ -538,14 +856,19 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
       'text_to_model': TaskType.TEXT_TO_3D,
       'image_to_model': TaskType.IMAGE_TO_3D,
       'multiview_to_model': TaskType.MULTIVIEW_TO_3D,
+      'text_to_image': TaskType.TEXT_TO_IMAGE,
+      'generate_image': TaskType.GENERATE_IMAGE,
       'texture_model': TaskType.TEXTURE,
       'refine_model': TaskType.REFINE,
+      'animate_prerigcheck': TaskType.PRE_RIG_CHECK,
       'animate_rig': TaskType.RIG,
       'animate_retarget': TaskType.ANIMATE,
       'mesh_segmentation': TaskType.SEGMENT,
+      'mesh_completion': TaskType.MESH_COMPLETION,
       'highpoly_to_lowpoly': TaskType.DECIMATE,
       'convert_model': TaskType.CONVERT,
-      'import_model': TaskType.IMPORT
+      'import_model': TaskType.IMPORT,
+      'stylize_model': TaskType.STYLIZE
     };
 
     const sdkStatus = statusMap[data.status] || TaskStatus.PROCESSING;
@@ -555,18 +878,21 @@ export class TripoProvider extends AbstractProvider<TripoConfig> {
     // Priority for primary model: pbr_model > model > base_model
     let result: TaskArtifacts | undefined;
     if (data.status === 'success' && data.output) {
-      const { model, pbr_model, base_model, rendered_image, generated_video } = data.output;
+      const { model, pbr_model, base_model, rendered_image, generated_image, generated_video, riggable, rig_type } = data.output;
 
       // Primary model URL - best available output
       const primaryModel = pbr_model || model || base_model || '';
 
       result = {
         model: primaryModel,
-        modelGlb: primaryModel,  // For generation tasks, output is GLB
+        modelGlb: primaryModel || undefined,
         modelPbr: pbr_model,
         modelBase: base_model,
         thumbnail: rendered_image,
-        video: generated_video
+        video: generated_video,
+        generatedImage: generated_image,
+        riggable,
+        rigType: rig_type
       };
     }
 

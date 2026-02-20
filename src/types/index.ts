@@ -16,15 +16,21 @@ export type {
   TextTo3DParams,
   ImageTo3DParams,
   MultiviewTo3DParams,
+  TextToImageParams,
+  GenerateImageParams,
   TextureParams,
   RefineParams,
+  PreRigCheckParams,
   RigParams,
   AnimateParams,
   SegmentParams,
+  MeshCompletionParams,
   DecimateParams,
   UVUnwrapParams,
   ConvertParams,
   ImportParams,
+  StylizeParams,
+  ProfileTo3DParams,
   TripoOptions,
   HunyuanOptions
 } from './params';
@@ -37,15 +43,21 @@ export {
   isTextTo3DParams,
   isImageTo3DParams,
   isMultiviewTo3DParams,
+  isTextToImageParams,
+  isGenerateImageParams,
   isTextureParams,
   isRefineParams,
+  isPreRigCheckParams,
   isRigParams,
   isAnimateParams,
   isSegmentParams,
+  isMeshCompletionParams,
   isDecimateParams,
   isUVUnwrapParams,
   isConvertParams,
-  isImportParams
+  isImportParams,
+  isStylizeParams,
+  isProfileTo3DParams
 } from './params';
 
 // Result types

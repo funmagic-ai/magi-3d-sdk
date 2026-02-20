@@ -14,20 +14,22 @@ import { TaskType, RemoteUrl } from './enums';
  * @see https://platform.tripo3d.ai/docs
  */
 export interface TripoOptions {
-  /** Model version selection */
-  model_version?: 'Turbo-v1.0-20250506' | 'v3.0-20250812' | 'v2.5-20250123' | 'v2.0-20240919' | 'v1.4-20240625';
+  /** Model version (varies by task type, see API docs for valid values) */
+  model_version?: string;
 
+  // --- Texture options ---
   /** Enable PBR materials (default: true) */
   pbr?: boolean;
   /** Enable texturing (default: true) */
   texture?: boolean;
-  /** Texture resolution */
+  /** Texture resolution: "standard" or "detailed" */
   texture_quality?: 'standard' | 'detailed';
   /** Texture alignment strategy */
   texture_alignment?: 'original_image' | 'geometry';
   /** Random seed for reproducible textures */
   texture_seed?: number;
 
+  // --- Geometry options ---
   /** Face count limit */
   face_limit?: number;
   /** Enable quad mesh output (forces FBX format) */
@@ -36,27 +38,90 @@ export interface TripoOptions {
   smart_low_poly?: boolean;
   /** Generate segmented model with editable parts */
   generate_parts?: boolean;
-  /** Geometry quality (v3.0+ only) */
+  /** Geometry quality: "standard" or "detailed" (v3.0+ Ultra Mode) */
   geometry_quality?: 'standard' | 'detailed';
+  /** Controls UV unwrapping during generation (default: true) */
+  export_uv?: boolean;
 
+  // --- Sizing and orientation ---
   /** Scale to real-world dimensions (meters) */
   auto_size?: boolean;
   /** Model orientation */
   orientation?: 'default' | 'align_image';
+
+  // --- Seeds ---
   /** Random seed for reproducible geometry */
   model_seed?: number;
+  /** Random seed for prompt-based image process (text_to_model) */
+  image_seed?: number;
 
+  // --- Compression ---
   /** Apply compression (meshopt) */
   compress?: 'geometry';
-  /** Optimize input image (slower) */
-  enable_image_autofix?: boolean;
 
-  /** Output format for rigging/conversion */
+  // --- Image input options ---
+  /** Optimize input image for better results (slower) */
+  enable_image_autofix?: boolean;
+  /** Transform object to T-pose (generate_image) */
+  t_pose?: boolean;
+  /** Transform sketch to rendered image (generate_image) */
+  sketch_to_render?: boolean;
+
+  // --- Rigging options ---
+  /** Output format for rigging/animation */
   out_format?: 'glb' | 'fbx';
   /** Skeleton type for rigging */
   rig_type?: 'biped' | 'quadruped' | 'hexapod' | 'octopod' | 'avian' | 'serpentine' | 'aquatic';
-  /** Animation preset for retargeting */
+  /** Rigging method */
+  spec?: 'mixamo' | 'tripo';
+
+  // --- Animation options ---
+  /** Single animation preset for retargeting */
   animation?: string;
+  /** Multiple animation presets for retargeting (max 5) */
+  animations?: string[];
+  /** Bake animation into model on output (default: true, GLB only) */
+  bake_animation?: boolean;
+  /** Include geometry in animation output (default: true) */
+  export_with_geometry?: boolean;
+  /** Animate in fixed place */
+  animate_in_place?: boolean;
+
+  // --- Mesh editing options ---
+  /** Part names from mesh segmentation */
+  part_names?: string[];
+  /** Bake textures/model during generation (default: true) */
+  bake?: boolean;
+
+  // --- Stylization options ---
+  /** Grid size for minecraft style (32-128, default: 80) */
+  block_size?: number;
+
+  // --- Conversion options ---
+  /** Force symmetry for quad remeshing */
+  force_symmetry?: boolean;
+  /** Flatten the bottom of converted model */
+  flatten_bottom?: boolean;
+  /** Bottom flatten depth (default: 0.01) */
+  flatten_bottom_threshold?: number;
+  /** Diffuse color texture size in pixels (default: 2048 or 4096) */
+  texture_size?: number;
+  /** Diffuse color texture format (e.g. JPEG, PNG, BMP, TIFF, WEBP) */
+  texture_format?: string;
+  /** Set pivot to center bottom */
+  pivot_to_center_bottom?: boolean;
+  /** Scale factor (default: 1) */
+  scale_factor?: number;
+  /** Include skeletal binding and animation in export (default: true) */
+  with_animation?: boolean;
+  /** Combine UV islands into unified layout (default: false) */
+  pack_uv?: boolean;
+  /** Include vertex colors in export (OBJ/GLTF only) */
+  export_vertex_colors?: boolean;
+  /** Model facing direction (default: "+x") */
+  export_orientation?: string;
+  /** Target platform for FBX export compatibility (experimental) */
+  fbx_preset?: string;
 }
 
 /**
@@ -75,11 +140,11 @@ export interface HunyuanOptions {
   /** Output format (rapid version) */
   ResultFormat?: 'OBJ' | 'GLB' | 'STL' | 'USDZ' | 'FBX' | 'MP4';
 
-  /** Multi-view support */
+  /** Multi-view images (additional views beyond the front image) */
   MultiViewImages?: Array<{
-    viewAngle: 'front' | 'left' | 'back' | 'right';
-    imageUrl?: string;
-    imageBase64?: string;
+    ViewType: 'left' | 'right' | 'back' | 'top' | 'bottom' | 'left_front' | 'right_front';
+    ViewImageUrl?: string;
+    ViewImageBase64?: string;
   }>;
 
   /** Face level for reduce face operation */
@@ -202,8 +267,6 @@ export interface SegmentParams<T = unknown> extends BaseTaskParams<T> {
   taskId?: string;
   /** Direct model URL (Hunyuan - alternative to taskId) */
   modelUrl?: RemoteUrl;
-  /** Part names to segment (optional, defaults to all) */
-  partNames?: string[];
 }
 
 /**
@@ -262,6 +325,72 @@ export interface ImportParams<T = unknown> extends BaseTaskParams<T> {
   input: string;
 }
 
+/**
+ * Parameters for text-to-image generation
+ */
+export interface TextToImageParams<T = unknown> extends BaseTaskParams<T> {
+  type: TaskType.TEXT_TO_IMAGE;
+  /** Text prompt directing image generation */
+  prompt: string;
+  /** Negative prompt (things to avoid) */
+  negative_prompt?: string;
+}
+
+/**
+ * Parameters for advanced image generation
+ */
+export interface GenerateImageParams<T = unknown> extends BaseTaskParams<T> {
+  type: TaskType.GENERATE_IMAGE;
+  /** Text prompt directing generation */
+  prompt: string;
+  /** Optional single image input URL */
+  input?: RemoteUrl;
+  /** Optional multiple image input URLs */
+  inputs?: RemoteUrl[];
+}
+
+/**
+ * Parameters for mesh completion (fill/repair mesh parts)
+ */
+export interface MeshCompletionParams<T = unknown> extends BaseTaskParams<T> {
+  type: TaskType.MESH_COMPLETION;
+  /** Source task ID of a mesh_segmentation task */
+  taskId: string;
+  /** Part names to complete (from segmentation) */
+  partNames?: string[];
+}
+
+/**
+ * Parameters for pre-rig check
+ */
+export interface PreRigCheckParams<T = unknown> extends BaseTaskParams<T> {
+  type: TaskType.PRE_RIG_CHECK;
+  /** Source task ID of the model to check */
+  taskId: string;
+}
+
+/**
+ * Parameters for model stylization
+ */
+export interface StylizeParams<T = unknown> extends BaseTaskParams<T> {
+  type: TaskType.STYLIZE;
+  /** Source task ID of the model to stylize */
+  taskId: string;
+  /** Style to apply */
+  style: 'lego' | 'voxel' | 'voronoi' | 'minecraft';
+}
+
+/**
+ * Parameters for face-to-3D character generation (Hunyuan only)
+ */
+export interface ProfileTo3DParams<T = unknown> extends BaseTaskParams<T> {
+  type: TaskType.PROFILE_TO_3D;
+  /** Face photo URL or base64 */
+  input: RemoteUrl;
+  /** Character template preset */
+  template: string;
+}
+
 // ============================================
 // Unified TaskParams type
 // ============================================
@@ -301,19 +430,27 @@ export type TaskParams<T = unknown> =
   | TextTo3DParams<T>
   | ImageTo3DParams<T>
   | MultiviewTo3DParams<T>
+  // Image generation
+  | TextToImageParams<T>
+  | GenerateImageParams<T>
   // Texture & refinement
   | TextureParams<T>
   | RefineParams<T>
   // Animation & rigging
+  | PreRigCheckParams<T>
   | RigParams<T>
   | AnimateParams<T>
   // Mesh operations
   | SegmentParams<T>
+  | MeshCompletionParams<T>
   | DecimateParams<T>
   | UVUnwrapParams<T>
+  // Avatar
+  | ProfileTo3DParams<T>
   // Utility
   | ConvertParams<T>
-  | ImportParams<T>;
+  | ImportParams<T>
+  | StylizeParams<T>;
 
 // ============================================
 // Type Guards
@@ -347,3 +484,9 @@ export function isDecimateParams(params: TaskParams): params is DecimateParams {
 export function isUVUnwrapParams(params: TaskParams): params is UVUnwrapParams { return params.type === TaskType.UV_UNWRAP; }
 export function isConvertParams(params: TaskParams): params is ConvertParams { return params.type === TaskType.CONVERT; }
 export function isImportParams(params: TaskParams): params is ImportParams { return params.type === TaskType.IMPORT; }
+export function isTextToImageParams(params: TaskParams): params is TextToImageParams { return params.type === TaskType.TEXT_TO_IMAGE; }
+export function isGenerateImageParams(params: TaskParams): params is GenerateImageParams { return params.type === TaskType.GENERATE_IMAGE; }
+export function isMeshCompletionParams(params: TaskParams): params is MeshCompletionParams { return params.type === TaskType.MESH_COMPLETION; }
+export function isPreRigCheckParams(params: TaskParams): params is PreRigCheckParams { return params.type === TaskType.PRE_RIG_CHECK; }
+export function isStylizeParams(params: TaskParams): params is StylizeParams { return params.type === TaskType.STYLIZE; }
+export function isProfileTo3DParams(params: TaskParams): params is ProfileTo3DParams { return params.type === TaskType.PROFILE_TO_3D; }

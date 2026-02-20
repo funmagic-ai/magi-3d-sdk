@@ -48,6 +48,12 @@ export interface TaskArtifacts {
   thumbnail?: RemoteUrl;
   /** 360-degree rotation video URL */
   video?: RemoteUrl;
+  /** Generated image URL (for text_to_image, generate_image tasks) */
+  generatedImage?: RemoteUrl;
+  /** Whether the model can be rigged (for pre_rig_check tasks) */
+  riggable?: boolean;
+  /** Detected rig type (for pre_rig_check tasks) */
+  rigType?: string;
   /** Texture maps (if returned separately by provider) */
   textureMaps?: {
     albedo?: RemoteUrl;

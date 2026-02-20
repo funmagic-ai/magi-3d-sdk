@@ -60,6 +60,12 @@ const provider = new TripoProvider(); // Uses process.env.TRIPO_API_KEY
 const provider = new TripoProvider({
   apiKey: 'your-api-key'
 });
+
+// Option 3: Enable STS upload (allows local file paths, localhost URLs, base64)
+const provider = new TripoProvider({
+  apiKey: 'your-api-key',
+  stsUpload: true
+});
 ```
 
 ### Hunyuan (Tencent Cloud)
@@ -79,6 +85,35 @@ const provider = new HunyuanProvider({
   region: 'ap-guangzhou'
 });
 ```
+
+## TaskType Reference
+
+All 18 task types with provider support:
+
+| Type | Description | Required Params | Tripo | Hunyuan |
+|------|-------------|-----------------|-------|---------|
+| `TEXT_TO_3D` | Generate 3D from text | `prompt` | Yes | Yes |
+| `IMAGE_TO_3D` | Generate 3D from image | `input` | Yes | Yes |
+| `MULTIVIEW_TO_3D` | Generate 3D from multi views | `inputs[]` | Yes | Yes |
+| `TEXT_TO_IMAGE` | Generate image from text | `prompt` | Yes | No |
+| `GENERATE_IMAGE` | Advanced image generation | `prompt` | Yes | No |
+| `TEXTURE` | Re-texture model | `taskId` or `modelUrl` | Yes | Yes |
+| `REFINE` | Improve model quality | `taskId` | Yes | No |
+| `PRE_RIG_CHECK` | Check if model is riggable | `taskId` | Yes | No |
+| `RIG` | Add skeleton rigging | `taskId` | Yes | No |
+| `ANIMATE` | Apply animation to rigged model | `taskId`, `animation` | Yes | No |
+| `SEGMENT` | Split model into parts | `taskId` or `modelUrl` | Yes | Yes (FBX only) |
+| `MESH_COMPLETION` | Complete/fill mesh parts | `taskId`, `partNames?` | Yes | No |
+| `DECIMATE` | Reduce polygon count | `taskId` or `modelUrl` | Yes | Yes |
+| `UV_UNWRAP` | UV unwrap model | `modelUrl` | No | Yes |
+| `PROFILE_TO_3D` | Face photo to 3D character | `input`, `template` | No | Yes |
+| `CONVERT` | Format conversion | `taskId`, `format` | Yes | Yes |
+| `IMPORT` | Import external 3D model | `input` | Yes | No |
+| `STYLIZE` | Apply artistic style | `taskId`, `style` | Yes | No |
+
+> **Note:** Hunyuan post-processing tasks (TEXTURE, DECIMATE, SEGMENT, UV_UNWRAP) require `modelUrl` instead of `taskId`. Tripo post-processing tasks use `taskId` to chain from a previous task.
+>
+> **Hunyuan SEGMENT constraint:** The Segment (3D Part Generation) API only accepts FBX format files. If chaining from a text-to-3d or image-to-3d result (which outputs GLB), you must convert to FBX first using `TaskType.CONVERT` with `format: 'fbx'`.
 
 ## Common Use Cases
 
@@ -104,9 +139,38 @@ const taskId = await client.createTask({
 });
 ```
 
-### 3. Multi-view to 3D
+### 3. Image-to-3D with Local File (Tripo STS Upload)
 
 ```typescript
+// Enable stsUpload in provider config
+const provider = new TripoProvider({ stsUpload: true });
+const client = new Magi3DClient(provider);
+
+// Now you can pass local file paths, localhost URLs, or base64
+const taskId = await client.createTask({
+  type: TaskType.IMAGE_TO_3D,
+  input: '/path/to/local/image.jpg'           // Local file path
+  // or: 'http://localhost:3000/image.jpg'     // Localhost URL
+  // or: 'data:image/png;base64,iVBORw0K...'   // Base64
+});
+```
+
+### 4. Multi-view to 3D
+
+```typescript
+// Tripo: 4 views [front, left, back, right]
+const taskId = await client.createTask({
+  type: TaskType.MULTIVIEW_TO_3D,
+  inputs: [
+    'https://example.com/front.jpg',
+    'https://example.com/left.jpg',
+    'https://example.com/back.jpg',
+    'https://example.com/right.jpg'
+  ]
+});
+
+// Hunyuan: front image + optional additional views (left, back, right)
+// Uses the same inputs[] array - front is required, others are optional
 const taskId = await client.createTask({
   type: TaskType.MULTIVIEW_TO_3D,
   inputs: [
@@ -118,53 +182,130 @@ const taskId = await client.createTask({
 });
 ```
 
-### 4. Add Rigging to Model (Tripo only)
+### 5. Text to Image (Tripo only)
+
+```typescript
+const taskId = await client.createTask({
+  type: TaskType.TEXT_TO_IMAGE,
+  prompt: 'a futuristic robot standing in a lab'
+});
+
+const result = await client.pollUntilDone(taskId);
+console.log('Image URL:', result.result?.generatedImage);
+```
+
+### 6. Advanced Image Generation (Tripo only)
+
+```typescript
+const taskId = await client.createTask({
+  type: TaskType.GENERATE_IMAGE,
+  prompt: 'a cartoon cat in T-pose',
+  input: 'https://example.com/reference.jpg',  // Optional reference image
+  providerOptions: {
+    model_version: 'flux.1_kontext_pro',
+    t_pose: true
+  }
+});
+```
+
+### 7. Import External Model (Tripo only)
+
+```typescript
+// Import a 3D model for post-processing (requires stsUpload for local files)
+const provider = new TripoProvider({ stsUpload: true });
+const client = new Magi3DClient(provider);
+
+const importTaskId = await client.createTask({
+  type: TaskType.IMPORT,
+  input: '/path/to/model.glb'
+});
+
+const result = await client.pollUntilDone(importTaskId);
+// Now use importTaskId for texture, stylize, convert, etc.
+```
+
+### 8. Pre-Rig Check (Tripo only)
+
+```typescript
+const checkTaskId = await client.createTask({
+  type: TaskType.PRE_RIG_CHECK,
+  taskId: modelTaskId
+});
+
+const check = await client.pollUntilDone(checkTaskId);
+console.log('Riggable:', check.result?.riggable);  // true/false
+console.log('Rig type:', check.result?.rigType);    // 'biped', 'quadruped', etc.
+```
+
+### 9. Add Rigging to Model (Tripo only)
 
 ```typescript
 const riggedTaskId = await client.createTask({
   type: TaskType.RIG,
-  taskId: originalTaskId,
+  taskId: modelTaskId,
   skeleton: 'biped',
   outFormat: 'fbx'
 });
 ```
 
-### 5. Apply Animation (Tripo only)
+### 10. Apply Animation (Tripo only)
 
 ```typescript
 const animatedTaskId = await client.createTask({
   type: TaskType.ANIMATE,
-  taskId: riggedTaskId,
+  taskId: riggedTaskId,   // Must be a RIG task result
   animation: 'preset:walk',
   outFormat: 'glb'
 });
 ```
 
-### 6. Convert Format
+### 11. Texture Model
 
 ```typescript
-const convertedTaskId = await client.createTask({
-  type: TaskType.CONVERT,
-  taskId: originalTaskId,
-  format: 'fbx',
-  providerOptions: {
-    export_orientation: '+y',
-    fbx_preset: 'mixamo'
-  }
+// Tripo: reference by taskId
+const texturedTaskId = await client.createTask({
+  type: TaskType.TEXTURE,
+  taskId: modelTaskId,
+  prompt: 'wooden texture with grain detail',
+  enablePBR: true
+});
+
+// Hunyuan: reference by modelUrl
+const texturedTaskId = await client.createTask({
+  type: TaskType.TEXTURE,
+  modelUrl: 'https://example.com/model.glb'
 });
 ```
 
-### 7. Reduce Polygon Count
+### 12. Mesh Segmentation + Completion (Tripo only)
 
 ```typescript
-// For Tripo: use taskId
+// Step 1: Segment model into parts
+const segTaskId = await client.createTask({
+  type: TaskType.SEGMENT,
+  taskId: modelTaskId
+});
+await client.pollUntilDone(segTaskId);
+
+// Step 2: Complete/fill specific parts
+const completionTaskId = await client.createTask({
+  type: TaskType.MESH_COMPLETION,
+  taskId: segTaskId,       // Must be a SEGMENT task result
+  partNames: ['arm_left']  // Optional: specific parts to complete
+});
+```
+
+### 13. Reduce Polygon Count
+
+```typescript
+// Tripo: use taskId
 const decimatedTaskId = await client.createTask({
   type: TaskType.DECIMATE,
-  taskId: originalTaskId,
+  taskId: modelTaskId,
   targetFaceCount: 5000
 });
 
-// For Hunyuan: use modelUrl
+// Hunyuan: use modelUrl
 const decimatedTaskId = await client.createTask({
   type: TaskType.DECIMATE,
   modelUrl: 'https://example.com/model.glb',
@@ -173,6 +314,195 @@ const decimatedTaskId = await client.createTask({
   }
 });
 ```
+
+### 14. Stylize Model (Tripo only)
+
+```typescript
+const stylizedTaskId = await client.createTask({
+  type: TaskType.STYLIZE,
+  taskId: modelTaskId,
+  style: 'lego'   // 'lego' | 'voxel' | 'voronoi' | 'minecraft'
+});
+```
+
+### 15. Face Photo to 3D Character (Hunyuan only)
+
+```typescript
+const taskId = await client.createTask({
+  type: TaskType.PROFILE_TO_3D,
+  input: 'https://example.com/face-photo.jpg',  // or base64
+  template: 'basketball'  // character template preset
+});
+
+const result = await client.pollUntilDone(taskId);
+// Available templates: basketball, badminton, pingpong, gymnastics, pilidance,
+// tennis, athletics, footballboykicking1, footballboykicking2, guitar,
+// footballboy, skateboard, futuresoilder, explorer, beardollgirl,
+// bibpantsboy, womansitpose, womanstandpose2, mysteriousprincess, manstandpose2
+```
+
+### 16. Convert Format
+
+```typescript
+const convertedTaskId = await client.createTask({
+  type: TaskType.CONVERT,
+  taskId: modelTaskId,
+  format: 'fbx',
+  providerOptions: {
+    export_orientation: '+y',
+    fbx_preset: 'mixamo'
+  }
+});
+```
+
+## Task Chaining (Tripo Pipelines)
+
+Tripo tasks chain by passing the completed `taskId` of one task as input to the next. Common pipelines:
+
+### Text to Animated Character
+
+```typescript
+// 1. Generate model
+const modelId = await client.createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a robot character'
+});
+await client.pollUntilDone(modelId);
+
+// 2. Check riggability
+const checkId = await client.createTask({
+  type: TaskType.PRE_RIG_CHECK,
+  taskId: modelId
+});
+const check = await client.pollUntilDone(checkId);
+
+// 3. Rig
+if (check.result?.riggable) {
+  const rigId = await client.createTask({
+    type: TaskType.RIG,
+    taskId: modelId,
+    skeleton: check.result.rigType || 'biped'
+  });
+  await client.pollUntilDone(rigId);
+
+  // 4. Animate
+  const animId = await client.createTask({
+    type: TaskType.ANIMATE,
+    taskId: rigId,
+    animation: 'preset:walk'
+  });
+  await client.pollUntilDone(animId);
+
+  // 5. Export as FBX
+  const exportId = await client.createTask({
+    type: TaskType.CONVERT,
+    taskId: animId,
+    format: 'fbx'
+  });
+  const final = await client.pollUntilDone(exportId);
+  console.log('Animated FBX:', final.result?.model);
+}
+```
+
+### Image to Textured Model
+
+```typescript
+// 1. Generate from image
+const modelId = await client.createTask({
+  type: TaskType.IMAGE_TO_3D,
+  input: 'https://example.com/chair.jpg'
+});
+await client.pollUntilDone(modelId);
+
+// 2. Re-texture with prompt
+const texId = await client.createTask({
+  type: TaskType.TEXTURE,
+  taskId: modelId,
+  prompt: 'polished walnut wood'
+});
+await client.pollUntilDone(texId);
+
+// 3. Convert to USDZ for AR
+const convertId = await client.createTask({
+  type: TaskType.CONVERT,
+  taskId: texId,
+  format: 'usdz'
+});
+const final = await client.pollUntilDone(convertId);
+console.log('AR-ready model:', final.result?.model);
+```
+
+### Text to Image to Model
+
+```typescript
+// 1. Generate concept image
+const imgId = await client.createTask({
+  type: TaskType.TEXT_TO_IMAGE,
+  prompt: 'a fantasy sword with glowing runes'
+});
+const imgResult = await client.pollUntilDone(imgId);
+
+// 2. Use generated image to create 3D model
+const modelId = await client.createTask({
+  type: TaskType.IMAGE_TO_3D,
+  input: imgResult.result!.generatedImage!  // URL from step 1
+});
+const modelResult = await client.pollUntilDone(modelId);
+```
+
+### Hunyuan: Text to Segmented Parts
+
+```typescript
+// Hunyuan segment requires FBX input; text-to-3d outputs GLB → convert first
+
+// 1. Generate model
+const modelId = await client.createTask({
+  type: TaskType.TEXT_TO_3D,
+  prompt: 'a bicycle'
+});
+const modelResult = await client.pollUntilDone(modelId);
+const glbUrl = modelResult.result!.model!;
+
+// 2. Convert to FBX (required for segment API)
+const convertId = await client.createTask({
+  type: TaskType.CONVERT,
+  taskId: glbUrl,  // Hunyuan Convert takes model URL as taskId
+  format: 'fbx'
+});
+const convertResult = await client.pollUntilDone(convertId);
+const fbxUrl = convertResult.result!.model!;
+
+// 3. Segment into parts
+const segId = await client.createTask({
+  type: TaskType.SEGMENT,
+  modelUrl: fbxUrl
+});
+const segResult = await client.pollUntilDone(segId);
+console.log('Segmented model:', segResult.result?.model);
+```
+
+## STS Upload (Tripo only)
+
+By default, Tripo requires publicly accessible URLs for file inputs. Enable `stsUpload: true` to accept local file paths, localhost URLs, and base64 data.
+
+```typescript
+const provider = new TripoProvider({
+  stsUpload: true   // Enable local file support
+});
+```
+
+When enabled, the SDK automatically:
+- **Images** (jpg, jpeg, png, webp): Uploaded via Direct Upload, returns a `file_token`
+- **3D models** (glb, obj, fbx, stl): Uploaded via STS Upload (S3 with temporary credentials)
+
+Accepted input formats with `stsUpload: true`:
+- Public URLs: `https://example.com/image.jpg`
+- Localhost URLs: `http://localhost:3000/image.jpg`
+- File paths: `/path/to/file.jpg` or `./relative/path.glb`
+- Base64: `data:image/png;base64,iVBORw0K...`
+- `file://` protocol: `file:///path/to/model.glb`
+
+Without `stsUpload`, only public URLs are accepted. Local inputs throw an error.
 
 ## React Integration - Complete Example
 
@@ -410,23 +740,6 @@ export async function GET(
 }
 ```
 
-## TaskType Reference
-
-| Type | Description | Required Params | Tripo | Hunyuan |
-|------|-------------|-----------------|-------|---------|
-| `TEXT_TO_3D` | Generate from text | `prompt` | Yes | Yes |
-| `IMAGE_TO_3D` | Generate from image | `input` | Yes | Yes |
-| `MULTIVIEW_TO_3D` | Generate from views | `inputs[]` | Yes | Yes |
-| `RIG` | Add skeleton | `taskId`, `skeleton` | Yes | No |
-| `ANIMATE` | Apply animation | `taskId`, `animation` | Yes | No |
-| `TEXTURE` | Re-texture model | `taskId` or `modelUrl` | Yes | Yes |
-| `DECIMATE` | Reduce polygons | `taskId` or `modelUrl` | Yes | Yes |
-| `CONVERT` | Format conversion | `taskId`, `format` | Yes | Yes |
-| `UV_UNWRAP` | UV unwrap | `modelUrl` | No | Yes |
-| `SEGMENT` | Component split | `taskId` or `modelUrl` | Yes | Yes |
-
-> **Note:** Hunyuan post-processing tasks (TEXTURE, DECIMATE, SEGMENT, UV_UNWRAP) require `modelUrl` instead of `taskId`.
-
 ## Provider Options (providerOptions)
 
 Use `providerOptions` for any provider-specific parameter. These are passed directly to the provider API.
@@ -443,7 +756,25 @@ providerOptions: {
   face_limit: 50000,
   quad: false,
   auto_size: true,                 // Real-world scale in meters
-  orientation: 'align_image'
+  orientation: 'align_image',
+  smart_low_poly: false,           // Hand-crafted low-poly topology
+  generate_parts: false,           // Segmented model with editable parts
+  export_uv: true                  // UV unwrapping during generation
+}
+```
+
+### Tripo Rigging/Animation Options
+
+```typescript
+providerOptions: {
+  out_format: 'fbx',              // 'glb' | 'fbx'
+  rig_type: 'biped',              // 'biped' | 'quadruped' | 'hexapod' | etc.
+  spec: 'tripo',                  // 'mixamo' | 'tripo'
+  model_version: 'v2.0-20250506', // Rig model version
+  animation: 'preset:walk',       // Single animation preset
+  animations: ['preset:walk', 'preset:run'],  // Multiple (max 5)
+  bake_animation: true,           // Bake animation into model
+  animate_in_place: false          // Fixed position animation
 }
 ```
 
@@ -451,15 +782,27 @@ providerOptions: {
 
 ```typescript
 providerOptions: {
-  format: 'FBX',
   quad: true,
   face_limit: 10000,
   texture_size: 2048,
+  texture_format: 'JPEG',         // JPEG, PNG, BMP, TIFF, WEBP, etc.
   pack_uv: true,
   export_orientation: '+y',        // '+x', '-x', '+y', '-y'
   fbx_preset: 'mixamo',            // 'blender', '3dsmax', 'mixamo'
   with_animation: true,
-  bake: true
+  bake: true,
+  flatten_bottom: false,
+  pivot_to_center_bottom: false,
+  scale_factor: 1,
+  export_vertex_colors: false      // OBJ/GLTF only
+}
+```
+
+### Tripo Stylize Options
+
+```typescript
+providerOptions: {
+  block_size: 80                   // Minecraft style grid size (32-128)
 }
 ```
 
@@ -484,17 +827,22 @@ interface StandardTask {
   id: string;
   provider: 'tripo' | 'hunyuan';
   type: TaskType;
-  status: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED';
+  status: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'TIMEOUT' | 'CANCELED';
   progress: number;           // 0-100
   progressDetail?: string;    // Raw provider status
   result?: {
     model: string;            // Primary model URL - always use this
     modelGlb?: string;        // GLB URL (when format is known)
     modelPbr?: string;        // PBR model URL
+    modelBase?: string;       // Base model URL (no texture)
     modelFbx?: string;
     modelObj?: string;
+    modelUsdz?: string;
     thumbnail?: string;
     video?: string;
+    generatedImage?: string;  // For TEXT_TO_IMAGE, GENERATE_IMAGE tasks
+    riggable?: boolean;       // For PRE_RIG_CHECK tasks
+    rigType?: string;         // For PRE_RIG_CHECK tasks
   };
   error?: {
     code: string;
@@ -502,6 +850,8 @@ interface StandardTask {
     raw: unknown;             // Provider's raw error
   };
   rawResponse?: unknown;      // Full provider API response
+  createdAt: number;          // Milliseconds
+  finishedAt?: number;        // Milliseconds
 }
 ```
 
@@ -539,8 +889,11 @@ try {
 | 2007 | `ORIGINAL_TASK_NOT_SUCCESS` | 400 | Original task not done |
 | 2008 | `CONTENT_POLICY_VIOLATION` | 400 | Content banned |
 | 2010 | `INSUFFICIENT_CREDITS` | 403 | No credits |
+| 2014 | `AUDIT_SERVICE_ERROR` | 500 | Content moderation error |
 | 2015 | `DEPRECATED_VERSION` | 400 | Version deprecated |
+| 2017 | `INVALID_MODEL_VERSION` | 400 | Invalid model version |
 | 2018 | `MODEL_TOO_COMPLEX` | 400 | Cannot remesh |
+| 2019 | `FILE_NOT_FOUND` | 404 | File reference invalid |
 
 Task status errors: `GENERATION_FAILED`, `CONTENT_POLICY_VIOLATION`, `TASK_EXPIRED`, `TASK_CANCELED`
 
@@ -566,11 +919,12 @@ Task status errors: `GENERATION_FAILED`, `TASK_CANCELED`
 | Feature | Tripo | Hunyuan |
 |---------|-------|---------|
 | Auth | API Key (TRIPO_API_KEY) | SecretId + SecretKey (HUNYUAN_*) |
-| Input | URL only | URL or Base64 |
+| Input | URL (+ local files with stsUpload) | URL or Base64 |
+| Task types | 16 | 9 |
 | Progress | Granular % | Estimated (0/50/100%) |
-| Rigging | Yes | No |
-| Animation | Yes | No |
-| Post-processing ref | taskId | modelUrl |
+| Rigging/Animation | Yes | No |
+| Post-processing ref | taskId (chaining) | modelUrl (direct) |
+| STS Upload | Yes (opt-in) | No |
 
 ---
 
@@ -585,8 +939,8 @@ magi-3d-sdk/
 │   │   ├── AbstractProvider.ts   # Base class all providers extend
 │   │   └── Magi3DClient.ts       # High-level client with polling
 │   ├── providers/
-│   │   ├── TripoProvider.ts      # Tripo AI implementation
-│   │   └── HunyuanProvider.ts    # Hunyuan implementation
+│   │   ├── TripoProvider.ts      # Tripo AI implementation (16 task types)
+│   │   └── HunyuanProvider.ts    # Hunyuan implementation (9 task types)
 │   ├── react/
 │   │   ├── useCreateTask.ts      # Main hook for generation
 │   │   ├── useTaskStatus.ts      # Status tracking hook (requires providerId)
@@ -596,9 +950,10 @@ magi-3d-sdk/
 │   │   ├── params.ts             # TaskParams union type + options
 │   │   ├── result.ts             # StandardTask, TaskArtifacts
 │   │   ├── providers.ts          # PROVIDERS, PROVIDER_TASK_TYPES exports
-│   │   └── config.ts             # Provider configs
+│   │   └── config.ts             # Provider configs (TripoConfig, HunyuanConfig)
 │   └── utils/
 │       ├── InputUtils.ts         # URL/base64 validation
+│       ├── s3-upload.ts          # Minimal AWS SigV4 signer for Tripo STS upload
 │       └── TencentCloudSigner.ts # TC3-HMAC-SHA256 for Hunyuan
 ├── scripts/
 │   └── test-*.ts                 # E2E test scripts
@@ -866,14 +1221,20 @@ main().catch(console.error);
 - Post-processing tasks require `modelUrl` (not taskId)
 - Format conversion is synchronous (no polling needed)
 - Uses HUNYUAN_SECRET_ID and HUNYUAN_SECRET_KEY env vars
+- Multiview-to-3D uses the same Pro endpoint (SubmitHunyuanTo3DProJob) with MultiViewImages parameter
+- File type in payload (`Type` field) is auto-detected from URL extension via `detectFileType()` helper (supports GLB, FBX, OBJ, STL, USDZ; defaults to GLB)
+- **Segment API only accepts FBX files** — chain via Convert first if source is GLB (e.g. text-to-3d → convert fbx → segment)
+- Supported task types (9): TEXT_TO_3D, IMAGE_TO_3D, MULTIVIEW_TO_3D, PROFILE_TO_3D, TEXTURE, DECIMATE, UV_UNWRAP, SEGMENT, CONVERT
 
 ## Tripo Implementation Notes
 
 - Uses simple API key auth
 - Single endpoint for all task types (`POST /v2/openapi/task`)
 - Granular progress percentage in response
-- URL input only (no Base64)
+- URL input by default; local files supported with `stsUpload: true`
+- STS upload uses minimal AWS SigV4 signer (no AWS SDK dependency)
 - All operations are async (polling required)
-- Post-processing tasks use `taskId`
+- Post-processing tasks use `taskId` (maps to `original_model_task_id` in API)
 - Error codes in response `code` field
 - Uses TRIPO_API_KEY env var
+- Supported task types (16): TEXT_TO_3D, IMAGE_TO_3D, MULTIVIEW_TO_3D, TEXT_TO_IMAGE, GENERATE_IMAGE, TEXTURE, REFINE, PRE_RIG_CHECK, RIG, ANIMATE, SEGMENT, MESH_COMPLETION, DECIMATE, CONVERT, IMPORT, STYLIZE

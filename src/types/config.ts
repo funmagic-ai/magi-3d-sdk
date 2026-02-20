@@ -29,6 +29,19 @@ export interface TripoConfig extends ProviderConfig {
   apiKey?: string;
   /** Custom API base URL (default: https://api.tripo3d.ai) */
   baseUrl?: string;
+  /**
+   * Enable STS upload for file inputs.
+   *
+   * When enabled, all file inputs (public URLs, localhost URLs, file paths, base64)
+   * are fetched/read locally and uploaded to Tripo's S3 storage before task creation.
+   * Images use Direct Upload, 3D models use STS Upload.
+   *
+   * When disabled (default), only public URLs are accepted as file inputs.
+   * Local file paths and localhost URLs will throw an error.
+   *
+   * @default false
+   */
+  stsUpload?: boolean;
 }
 
 /**

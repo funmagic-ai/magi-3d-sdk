@@ -17,6 +17,8 @@ import {
   TaskArtifacts,
   isTextTo3DParams,
   isImageTo3DParams,
+  isMultiviewTo3DParams,
+  isProfileTo3DParams,
   isTextureParams,
   isDecimateParams,
   isUVUnwrapParams,
@@ -102,6 +104,21 @@ function mapHunyuanErrorCode(hunyuanCode: string): string {
   return hunyuanCode;
 }
 
+/**
+ * Detect file type from URL extension for Hunyuan File/File3D payloads
+ * @internal
+ */
+function detectFileType(url: string): string {
+  // Strip query params and get extension
+  const path = url.split('?')[0].toLowerCase();
+  if (path.endsWith('.fbx')) return 'FBX';
+  if (path.endsWith('.obj') || path.endsWith('.zip')) return 'OBJ';
+  if (path.endsWith('.stl')) return 'STL';
+  if (path.endsWith('.usdz')) return 'USDZ';
+  // Default to GLB (most common output from Hunyuan)
+  return 'GLB';
+}
+
 // ============================================
 // Hunyuan API Types (Internal)
 // ============================================
@@ -152,6 +169,9 @@ const ACTION_MAP: Record<string, { submit: string; query: string }> = {
   // Pro version for primary generation (better quality, slower)
   [TaskType.TEXT_TO_3D]: { submit: 'SubmitHunyuanTo3DProJob', query: 'QueryHunyuanTo3DProJob' },
   [TaskType.IMAGE_TO_3D]: { submit: 'SubmitHunyuanTo3DProJob', query: 'QueryHunyuanTo3DProJob' },
+  [TaskType.MULTIVIEW_TO_3D]: { submit: 'SubmitHunyuanTo3DProJob', query: 'QueryHunyuanTo3DProJob' },
+  // Avatar
+  [TaskType.PROFILE_TO_3D]: { submit: 'SubmitProfileTo3DJob', query: 'DescribeProfileTo3DJob' },
   // Post-processing
   [TaskType.TEXTURE]: { submit: 'SubmitTextureTo3DJob', query: 'DescribeTextureTo3DJob' },
   [TaskType.DECIMATE]: { submit: 'SubmitReduceFaceJob', query: 'DescribeReduceFaceJob' },
@@ -275,6 +295,8 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
     // Register supported task types
     this.supportedTaskTypes.add(TaskType.TEXT_TO_3D);
     this.supportedTaskTypes.add(TaskType.IMAGE_TO_3D);
+    this.supportedTaskTypes.add(TaskType.MULTIVIEW_TO_3D);
+    this.supportedTaskTypes.add(TaskType.PROFILE_TO_3D);
     this.supportedTaskTypes.add(TaskType.TEXTURE);
     this.supportedTaskTypes.add(TaskType.DECIMATE);
     this.supportedTaskTypes.add(TaskType.UV_UNWRAP);
@@ -387,6 +409,44 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
       };
     }
 
+    // Multiview-to-3D: front image as ImageUrl/ImageBase64, others as MultiViewImages
+    if (isMultiviewTo3DParams(params)) {
+      const viewTypes = ['front', 'left', 'back', 'right'] as const;
+      const frontInput = params.inputs[0];
+      const isFrontUrl = InputUtils.isUrl(frontInput);
+
+      const multiViewImages: Array<{ ViewType: string; ViewImageUrl?: string; ViewImageBase64?: string }> = [];
+      for (let i = 1; i < params.inputs.length; i++) {
+        const input = params.inputs[i];
+        if (!input) continue;
+        const viewType = viewTypes[i];
+        if (InputUtils.isUrl(input)) {
+          multiViewImages.push({ ViewType: viewType, ViewImageUrl: input });
+        } else {
+          multiViewImages.push({ ViewType: viewType, ViewImageBase64: InputUtils.extractBase64(input) });
+        }
+      }
+
+      return {
+        ...(isFrontUrl
+          ? { ImageUrl: frontInput }
+          : { ImageBase64: InputUtils.extractBase64(frontInput) }),
+        ...(multiViewImages.length > 0 ? { MultiViewImages: multiViewImages } : {}),
+        ...this.mapProviderOptions(options)
+      };
+    }
+
+    // Profile-to-3D: face photo + character template
+    if (isProfileTo3DParams(params)) {
+      const isUrl = InputUtils.isUrl(params.input);
+      return {
+        Profile: isUrl
+          ? { Url: params.input }
+          : { Base64: InputUtils.extractBase64(params.input) },
+        Template: params.template
+      };
+    }
+
     // Texture
     if (isTextureParams(params)) {
       if (!params.modelUrl) {
@@ -394,7 +454,7 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
       }
       const payload: Record<string, unknown> = {
         File3D: {
-          Type: 'GLB',
+          Type: detectFileType(params.modelUrl),
           Url: params.modelUrl
         }
       };
@@ -417,11 +477,11 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
       }
       return {
         File3D: {
-          Type: 'GLB',
+          Type: detectFileType(params.modelUrl),
           Url: params.modelUrl
         },
         ...(params.quad && { PolygonType: 'quadrilateral' }),
-        ...options
+        ...this.mapProviderOptions(options)
       };
     }
 
@@ -432,7 +492,7 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
       }
       return {
         File: {
-          Type: 'GLB',
+          Type: detectFileType(params.modelUrl),
           Url: params.modelUrl
         }
       };
@@ -445,7 +505,7 @@ export class HunyuanProvider extends AbstractProvider<HunyuanConfig> {
       }
       return {
         File: {
-          Type: 'FBX',
+          Type: detectFileType(params.modelUrl),
           Url: params.modelUrl
         }
       };

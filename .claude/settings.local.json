@@ -7,7 +7,14 @@
       "Bash(pnpm run build:*)",
       "Bash(pnpm run typecheck:*)",
       "Bash(pnpm run test:*)",
-      "Bash(pnpm run docs)"
+      "Bash(pnpm run docs)",
+      "WebFetch(domain:platform.tripo3d.ai)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vitest:*)",
+      "Bash(pnpm tsc:*)",
+      "Bash(pnpm tsx:*)",
+      "Bash(python3:*)",
+      "Bash(pnpm typecheck:*)"
     ]
   }
 }

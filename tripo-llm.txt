@@ -1,0 +1,1360 @@
+================================================================================
+TRIPO3D API - COMPLETE REFERENCE FOR AI AGENTS
+================================================================================
+
+This document provides everything an AI agent needs to orchestrate Tripo3D API
+calls: the core task lifecycle, valid task chaining rules, common pipelines,
+and full parameter reference for every endpoint.
+
+TABLE OF CONTENTS
+-----------------
+  0.   QUICK START -- CORE ORCHESTRATION PATTERN
+  0B.  TASK DEPENDENCY GRAPH
+  0C.  COMMON WORKFLOW PIPELINES
+  1.   GENERAL (base URL, auth, response format)
+  2.   UPLOAD (direct upload, STS upload, file input reference)
+  3.   TASK POLLING (status values, output fields)
+  4.   GENERATION TASKS (text_to_image, generate_image, text_to_model,
+       image_to_model, multiview_to_model, refine_model)
+  5.   TEXTURE (texture_model)
+  6.   IMPORT MODEL (import_model)
+  7.   MESH EDITING (mesh_segmentation, mesh_completion, highpoly_to_lowpoly)
+  8.   ANIMATION (animate_prerigcheck, animate_rig, animate_retarget)
+  9.   POST-PROCESS (stylize_model, convert_model)
+  10.  ERROR CODE REFERENCE
+
+
+================================================================================
+0. QUICK START -- CORE ORCHESTRATION PATTERN
+================================================================================
+
+Every Tripo3D workflow follows a three-phase pattern:
+
+PHASE 1 -- CREATE TASK
+  POST https://api.tripo3d.ai/v2/openapi/task
+  Body: { "type": "<task_type>", ...params }
+  Returns: { "code": 0, "data": { "task_id": "<uuid>" } }
+
+PHASE 2 -- POLL UNTIL DONE
+  GET https://api.tripo3d.ai/v2/openapi/task/<task_id>
+  Repeat every 2-5 seconds until status is a finalized value.
+  Finalized statuses: success, failed, banned, expired, cancelled, unknown.
+  Only "success" means the task completed and output URLs are available.
+
+PHASE 3 -- CHAIN TO NEXT TASK
+  Use the completed task_id as original_model_task_id (or draft_model_task_id
+  for refine_model) in the next task's request body.
+
+KEY RULES:
+  - File inputs: Upload first (Section 2), then reference via file_token, url,
+    or object in the task request.
+  - Task linking: The source task must have status="success" and must have been
+    created with the SAME API key.
+  - Output URL expiration: All output URLs (model, pbr_model, rendered_image,
+    etc.) expire after 5 minutes. Re-poll the task to get fresh URLs.
+  - Rate limits: If you receive code 2000, back off and retry.
+
+
+================================================================================
+0B. TASK DEPENDENCY GRAPH
+================================================================================
+
+TABLE A: VALID INPUT CHAINS
+
+Which task types each task accepts as original_model_task_id (or equivalent).
+
+  Task Type              Input Field                  Accepts These Source Task Types
+  ---------------------  ---------------------------  -----------------------------------------------
+  texture_model          original_model_task_id       text_to_model, image_to_model,
+                                                      multiview_to_model, texture_model, import_model
+
+  mesh_segmentation      original_model_task_id       text_to_model, image_to_model,
+                                                      multiview_to_model, texture_model, refine_model,
+                                                      import_model, highpoly_to_lowpoly
+
+  mesh_completion        original_model_task_id       mesh_segmentation ONLY
+
+  highpoly_to_lowpoly    original_model_task_id       text_to_model, image_to_model,
+                                                      multiview_to_model, texture_model, refine_model,
+                                                      import_model, mesh_segmentation, mesh_completion
+
+  animate_prerigcheck    original_model_task_id       any model-producing task
+
+  animate_rig            original_model_task_id       any model-producing task
+
+  animate_retarget       original_model_task_id       animate_rig ONLY
+
+  stylize_model          original_model_task_id       text_to_model, image_to_model,
+                                                      multiview_to_model, texture_model, refine_model,
+                                                      import_model, animate_rig, animate_retarget
+
+  convert_model          original_model_task_id       text_to_model, image_to_model,
+                                                      multiview_to_model, texture_model, refine_model,
+                                                      import_model, animate_rig, animate_retarget,
+                                                      convert_model (re-conversion, format only)
+
+  refine_model           draft_model_task_id          text_to_model, image_to_model,
+                         (NOT original_model_task_id)  multiview_to_model
+                                                      (only model_version < v2.0)
+
+NOTE: text_to_image and generate_image produce images, not models. Their output
+(generated_image URL) can be used as a file url input for image_to_model, but
+they are NOT linked via original_model_task_id.
+
+
+TABLE B: TASK OUTPUT FIELDS (on success)
+
+What each task type populates in the output object when status="success".
+
+  Task Type              Output Fields
+  ---------------------  ---------------------------------------------------------
+  text_to_image          generated_image
+  generate_image         generated_image
+  text_to_model          model, base_model, pbr_model, rendered_image
+  image_to_model         model, base_model, pbr_model, rendered_image
+  multiview_to_model     model, base_model, pbr_model, rendered_image
+  refine_model           model, rendered_image
+  texture_model          model, pbr_model, rendered_image
+  import_model           model
+  mesh_segmentation      model
+  mesh_completion        model
+  highpoly_to_lowpoly    model
+  animate_prerigcheck    riggable (bool), rig_type (string) -- NO model URL
+  animate_rig            model
+  animate_retarget       model
+  stylize_model          model
+  convert_model          model
+
+All URL fields expire after 5 minutes. Re-poll the task to refresh.
+
+
+================================================================================
+0C. COMMON WORKFLOW PIPELINES
+================================================================================
+
+Below are step-by-step recipes for common end-to-end workflows. Each step
+shows the task type and key parameters. Always poll each task to success
+before starting the next step.
+
+--- PIPELINE 1: Text to Final Model ---
+Goal: Generate a 3D model from text and export as FBX/USDZ/OBJ.
+
+  Step 1: POST /task { "type": "text_to_model", "prompt": "..." }
+          Poll -> task_id_1, output has model URL (GLB)
+  Step 2: POST /task { "type": "convert_model",
+                       "original_model_task_id": "<task_id_1>",
+                       "format": "FBX" }
+          Poll -> output has model URL in target format
+
+--- PIPELINE 2: Image to Final Model ---
+Goal: Upload an image, generate a 3D model, export.
+
+  Step 1: Upload image (Section 2.1 or 2.2) -> get file_token or object
+  Step 2: POST /task { "type": "image_to_model",
+                       "file": { "type": "png", "file_token": "<token>" } }
+          Poll -> task_id_1
+  Step 3: POST /task { "type": "convert_model",
+                       "original_model_task_id": "<task_id_1>",
+                       "format": "USDZ" }
+          Poll -> output has model URL
+
+--- PIPELINE 3: Image to Animated Character ---
+Goal: Upload image, generate model, rig, animate, export.
+
+  Step 1: Upload image -> file_token or object
+  Step 2: POST /task { "type": "image_to_model",
+                       "file": { "type": "png", "file_token": "<token>" } }
+          Poll -> task_id_model
+  Step 3: POST /task { "type": "animate_prerigcheck",
+                       "original_model_task_id": "<task_id_model>" }
+          Poll -> check output.riggable and output.rig_type
+  Step 4: POST /task { "type": "animate_rig",
+                       "original_model_task_id": "<task_id_model>",
+                       "rig_type": "<rig_type from step 3>" }
+          Poll -> task_id_rig
+  Step 5: POST /task { "type": "animate_retarget",
+                       "original_model_task_id": "<task_id_rig>",
+                       "animation": "preset:walk" }
+          Poll -> task_id_anim
+  Step 6: POST /task { "type": "convert_model",
+                       "original_model_task_id": "<task_id_anim>",
+                       "format": "FBX" }
+          Poll -> output has animated model URL
+
+--- PIPELINE 4: Mesh Editing Pipeline ---
+Goal: Generate a model, segment it, complete missing parts.
+
+  Step 1: POST /task { "type": "text_to_model", "prompt": "..." }
+          Poll -> task_id_model
+  Step 2: POST /task { "type": "mesh_segmentation",
+                       "original_model_task_id": "<task_id_model>" }
+          Poll -> task_id_seg (download model to see part names in Blender)
+  Step 3: POST /task { "type": "mesh_completion",
+                       "original_model_task_id": "<task_id_seg>",
+                       "part_names": ["arm_left"] }
+          Poll -> task_id_comp, download model from output URL
+
+  NOTE: mesh_completion output is a GLB model URL. It cannot be chained
+  to texture_model or convert_model. To re-texture, apply texture_model
+  BEFORE segmentation. To create a low-poly version after completion,
+  chain to highpoly_to_lowpoly (which does accept mesh_completion).
+
+--- PIPELINE 5: Import and Post-Process ---
+Goal: Import an existing 3D model and apply Tripo post-processing.
+
+  Step 1: Get STS token: POST /upload/sts/token { "format": "glb" }
+  Step 2: Upload file to S3 using STS credentials
+  Step 3: POST /task { "type": "import_model",
+                       "file": { "object": { "bucket": "tripo-data",
+                                             "key": "<resource_uri>" } } }
+          Poll -> task_id_import
+  Step 4: Use task_id_import as original_model_task_id for any post-processing
+          task (texture_model, stylize_model, convert_model, etc.)
+
+--- PIPELINE 6: Text to Image to Model ---
+Goal: Generate an image from text, then use it to create a 3D model.
+
+  Step 1: POST /task { "type": "text_to_image", "prompt": "..." }
+          Poll -> output.generated_image is a URL
+  Step 2: POST /task { "type": "image_to_model",
+                       "file": { "type": "png",
+                                 "url": "<generated_image URL from step 1>" } }
+          Poll -> task_id_model
+  Step 3: (Optional) convert, texture, animate, etc.
+
+  NOTE: text_to_image output is linked by URL, not by task_id. Use the
+  generated_image URL as the file.url in the next task.
+
+--- PIPELINE 7: Low-Poly Game Asset ---
+Goal: Generate a model and create a low-poly version for games.
+
+  Step 1: POST /task { "type": "text_to_model", "prompt": "...",
+                       "model_version": "v2.5-20250123" }
+          Poll -> task_id_model
+  Step 2: POST /task { "type": "highpoly_to_lowpoly",
+                       "original_model_task_id": "<task_id_model>",
+                       "face_limit": 5000, "quad": true }
+          Poll -> task_id_lowpoly
+  Step 3: POST /task { "type": "convert_model",
+                       "original_model_task_id": "<task_id_lowpoly>",
+                       "format": "FBX" }
+          Poll -> output has low-poly model URL
+
+
+================================================================================
+1. GENERAL
+================================================================================
+
+BASE URL
+--------
+https://api.tripo3d.ai/v2/openapi
+
+AUTHENTICATION
+--------------
+All requests require a Bearer token in the Authorization header:
+
+  Authorization: Bearer tsk_***
+
+REQUEST FORMAT
+--------------
+Unless otherwise specified, the body of all requests should be in JSON format.
+Content-Type: application/json
+
+RESPONSE STRUCTURE
+------------------
+All endpoints adhere to a unified response structure (except SSE-enabled ones).
+
+Success:
+  {
+    "code": 0,
+    "data": {}
+  }
+  code is always 0 for successful requests. data varies by endpoint.
+
+Error:
+  {
+    "code": 2002,
+    "message": "This task type is not supported",
+    "suggestion": "Refer to API documentation for supported task types"
+  }
+  code is non-zero. message and suggestion help diagnose and fix the issue.
+
+TRACE ID
+--------
+All responses include the header:
+
+  X-Tripo-Trace-ID: <uuid>
+
+This ID is randomly generated per request. Log it for tracking purposes.
+Provide it when reporting errors for investigation.
+
+
+================================================================================
+2. UPLOAD
+================================================================================
+
+There are two upload methods: Direct Upload and STS Upload.
+
+--------------------------------------------------------------------------------
+2.1 DIRECT UPLOAD
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/upload/sts
+
+Request:
+  Content-Type: multipart/form-data
+
+  file (required): The image to upload.
+    - Accepted types: webp, jpeg, png
+    - Resolution: between 20px and 6000px
+    - Suggested resolution: more than 256px
+
+Response:
+  {
+    "code": 0,
+    "data": {
+      "image_token": "ce85f375-3ccc-440b-b847-571588872ec2"
+    }
+  }
+
+  image_token: Identifier for the uploaded image. Use this in file_token fields.
+
+Example (curl):
+  curl -X POST 'https://api.tripo3d.ai/v2/openapi/upload/sts' \
+    -H 'Content-Type: multipart/form-data' \
+    -H "Authorization: Bearer ${APIKEY}" \
+    -F "file=@cat.jpeg"
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  400   2002  Task type unsupported                      Check task type
+  400   2003  Input file is empty                        Check file or firewall
+  400   2004  File type unsupported                      Check supported types
+
+--------------------------------------------------------------------------------
+2.2 STS UPLOAD (Recommended for large files / non-US users)
+--------------------------------------------------------------------------------
+
+Two-step process: (1) Get STS token, (2) Upload to S3 with temporary credentials.
+
+STEP 1: GET STS TOKEN
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/upload/sts/token
+
+Request (JSON):
+  format (required): File format.
+    - For images: webp, jpeg, or png
+      Resolution: between 20x20px and 6000x6000px. Suggested > 256x256px.
+    - For 3D models: glb, obj, fbx, or stl
+
+Response:
+  {
+    "code": 0,
+    "data": {
+      "s3_host": "s3.us-west-2.amazonaws.com",
+      "resource_bucket": "tripo-data",
+      "resource_uri": "<path>/input.<ext>",
+      "session_token": "<temporary token>",
+      "sts_ak": "<temporary access key id>",
+      "sts_sk": "<temporary secret access key>"
+    }
+  }
+
+  s3_host:          S3 host (normally s3.us-west-2.amazonaws.com)
+  resource_bucket:  Bucket name (normally tripo-data)
+  resource_uri:     Target S3 path for the file
+  session_token:    Temporary session token for upload
+  sts_ak:           Temporary AWS access key ID
+  sts_sk:           Temporary AWS secret access key
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  400   1004  Invalid parameter(s)                       Check API docs
+  403   1005  Access denied                              Check permissions
+
+STEP 2: UPLOAD TO S3 WITH AWS SDK
+
+Prerequisites from Step 1:
+  - file_path:       Your local file path
+  - resource_bucket: "tripo-data"
+  - resource_uri:    S3 key from token response
+  - session_token:   Temporary token
+  - sts_ak:          Temporary access key ID
+  - sts_sk:          Temporary secret access key
+
+Standard upload (shell):
+  aws configure set aws_access_key_id "sts_ak"
+  aws configure set aws_secret_access_key "sts_sk"
+  aws configure set aws_session_token "session_token"
+  aws configure set region "us-west-2"
+  aws s3 cp "file_path" "s3://resource_bucket/resource_uri"
+
+Accelerated upload (recommended for non-US users or files > 100KB):
+  aws s3 cp "file_path" "s3://resource_bucket/resource_uri" \
+    --endpoint-url "https://s3-accelerate.amazonaws.com"
+
+--------------------------------------------------------------------------------
+2.3 FILE INPUT REFERENCE
+--------------------------------------------------------------------------------
+
+Many tasks accept file inputs (image_to_model, multiview_to_model,
+generate_image, texture_model, import_model). All use the same structure:
+
+FILE OBJECT STRUCTURE:
+  {
+    "type":       "<file extension, e.g. png, jpeg, glb>",
+    "file_token": "<from Direct Upload>",
+    "url":        "<direct URL to file>",
+    "object":     { "bucket": "tripo-data", "key": "<resource_uri>" }
+  }
+
+  file_token, url, and object are MUTUALLY EXCLUSIVE -- use exactly one.
+
+WHEN TO USE EACH METHOD:
+  file_token  - After Direct Upload (Section 2.1). Best for small images.
+  url         - When you have a public URL (e.g. from text_to_image output).
+                JPEG/PNG only, max 20MB.
+  object      - After STS Upload (Section 2.2). Recommended for large files
+                and 3D models (glb, obj, fbx, stl).
+
+IMAGE CONSTRAINTS (for image inputs):
+  - Accepted types: webp, jpeg, png
+  - Resolution: 20x20px to 6000x6000px
+  - Suggested: > 256x256px
+
+TASKS THAT USE FILE INPUTS:
+  - image_to_model:      file (required, single image)
+  - multiview_to_model:  files (required, list of 4 images)
+  - generate_image:      file (optional, single) or files (optional, list)
+  - texture_model:       texture_prompt.image / texture_prompt.images /
+                         texture_prompt.style_image (all optional)
+  - import_model:        file (required, 3D model via STS object)
+
+
+================================================================================
+3. TASK POLLING
+================================================================================
+
+Endpoint: GET https://api.tripo3d.ai/v2/openapi/task/:task_id
+
+Request:
+  task_id (path parameter): The task ID to query.
+
+Response:
+  {
+    "code": 0,
+    "data": {
+      "task_id": "<uuid>",
+      "type": "text_to_model",
+      "status": "running",
+      "input": { ... },
+      "output": { ... },
+      "progress": 99,
+      "create_time": 1709048933
+    }
+  }
+
+Response Fields:
+  task_id:     Unique identifier (matches request)
+  type:        Task type (e.g. text_to_model, image_to_model, etc.)
+  status:      Current task status (see below)
+  input:       Input data object (varies by task type)
+  output:      Result object (see below)
+  progress:    0-100 integer progress indicator
+  create_time: Unix timestamp of task creation
+
+STATUS VALUES:
+  Ongoing:
+    queued     - Awaiting processing (progress = 0)
+    running    - Currently processing (progress = 0-99)
+
+  Finalized:
+    success    - Completed successfully (progress = 100)
+    failed     - Failed (usually server-side; report with task_id)
+    banned     - Banned for content policy violation
+    expired    - Expired; retry and report if recurs
+    cancelled  - Cancelled
+    unknown    - Status undetermined; contact support
+
+OUTPUT FIELDS (when status = success):
+  model:           URL to download the model (expires in 5 minutes)
+  base_model:      URL to download the base model (expires in 5 minutes)
+  pbr_model:       URL to download the PBR model (expires in 5 minutes)
+  generated_image: URL for generated image (expires in 5 minutes)
+  rendered_image:  URL for model preview image (expires in 5 minutes)
+
+BEHAVIOR NOTES:
+  - Must query with the SAME API key that created the task. Using a different
+    key (even from the same user) returns "task not found."
+  - Streaming is recommended over polling for real-time progress.
+  - The output field may contain additional undocumented fields that can change
+    without notice. Do not depend on them.
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Check task ID
+
+
+================================================================================
+4. GENERATION TASKS
+================================================================================
+
+All generation tasks use:
+  POST https://api.tripo3d.ai/v2/openapi/task
+
+All return:
+  {
+    "code": 0,
+    "data": {
+      "task_id": "<uuid>"
+    }
+  }
+
+--------------------------------------------------------------------------------
+4.1 TEXT TO IMAGE (type: text_to_image)
+--------------------------------------------------------------------------------
+
+Request:
+  type (required):             "text_to_image"
+  prompt (required):           Text directing image generation.
+                               Max 1024 chars (~100 words).
+                               Supports multiple languages.
+                               Emojis and certain special Unicode not supported.
+  negative_prompt (optional):  Reverse direction prompt. Max 255 chars.
+
+Output (on success):
+  generated_image: URL to generated image (expires in 5 minutes).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  400   2002  Task type unsupported                      Check task type
+  400   2008  Content policy violation                   Modify input and retry
+  403   2010  Insufficient credits                       Purchase more credits
+  400   2015  Deprecated version                         Use higher version
+  400   2017  Invalid model version                      Check available versions
+
+--------------------------------------------------------------------------------
+4.2 ADVANCED GENERATE IMAGE (type: generate_image)
+--------------------------------------------------------------------------------
+
+Improved image generation with image prompt and detailed parameters.
+
+Request:
+  type (required):             "generate_image"
+
+  model_version (optional):    Available versions:
+                               - flux.1_kontext_pro (default)
+                               - flux.1_dev (cannot use with image file)
+                               - gpt_4o
+                               - gemini_2.5_flash_image_preview (aka nano banana)
+                               - z_image (cannot use with image file)
+
+  prompt (required):           Text directing generation.
+                               Max 1024 chars (~100 words).
+                               Multi-language support. No emojis.
+                               Multi-image reference: use [image number] syntax
+                               in prompt (e.g. "style of image[1] with
+                               colors from image[2]").
+
+  file (optional):             Single image input.
+                               Resolution: 20px-6000px. Suggested > 256px.
+    type:       File type (specify correctly though not validated)
+    file_token: From upload (mutually exclusive with url and object)
+    url:        Direct URL, JPEG/PNG, max 20MB (mutually exclusive)
+    object:     From STS upload (Strongly Recommended, mutually exclusive)
+      bucket: "tripo-data"
+      key:    resource_uri from STS token
+
+  files (optional):            Multiple image inputs (list).
+                               flux.1_kontext_pro: max 4 images
+                               gpt_4o / gemini_2.5_flash_image_preview: max 10
+                               Each image: 20x20px - 6000x6000px. Suggested > 256x256px.
+    (same sub-fields as file: type, file_token, url, object)
+
+  t_pose (optional):           Boolean. Transform object to T-pose while keeping
+                               main characteristics. Default: false.
+
+  sketch_to_render (optional): Boolean. Transform sketch to rendered image.
+                               Default: false.
+
+Output (on success):
+  generated_image: URL to generated image (expires in 5 minutes).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  400   2002  Task type unsupported                      Check task type
+  400   2008  Content policy violation                   Modify input and retry
+  403   2010  Insufficient credits                       Purchase more credits
+  500   2014  Audit service error                        Retry or contact support
+  400   2015  Deprecated version                         Use higher version
+  400   2017  Invalid model version                      Check available versions
+  404   2019  File not found                             Verify file reference
+
+--------------------------------------------------------------------------------
+4.3 TEXT TO MODEL (type: text_to_model)
+--------------------------------------------------------------------------------
+
+Request:
+  type (required):             "text_to_model"
+
+  model_version (optional):    Available versions:
+                               - Turbo-v1.0-20250506
+                               - v3.0-20250812
+                               - v2.5-20250123 (default)
+                               - v2.0-20240919
+                               - v1.4-20240625
+                               - v1.3-20240522 (Deprecated)
+
+  prompt (required):           Text directing model generation.
+                               Max 1024 chars (~100 words).
+                               Multi-language. No emojis.
+
+  negative_prompt (optional):  Reverse direction prompt. Max 255 chars.
+
+  image_seed (optional):       Integer. Random seed for prompt-based process.
+                               Randomly chosen if not set.
+
+  model_seed (optional):       Integer. Random seed for geometry generation.
+                               For model_version >= v2.0: same seed = same model.
+                               Randomly chosen if not set.
+
+  --- Options below: only valid for model_version >= v2.0-20240919 ---
+
+  face_limit (optional):       Limits output face count. Adaptively determined
+                               if not set. With smart_low_poly: 1000-20000.
+                               With smart_low_poly + quad: 500-10000.
+
+  texture (optional):          Boolean. Enable texturing. Default: true.
+                               Set false for base model without textures.
+
+  pbr (optional):              Boolean. Enable PBR. Default: true.
+                               If true, texture is forced true.
+
+  texture_seed (optional):     Integer. Random seed for texture generation.
+                               Same seed = same textures. Randomly chosen if not set.
+                               Use same model_seed + different texture_seed for
+                               different textures on same geometry.
+
+  texture_quality (optional):  "standard" (default) or "detailed".
+                               detailed = high-resolution textures with finer detail.
+
+  auto_size (optional):        Boolean. Auto-scale to real-world dimensions (meters).
+                               Default: false.
+
+  quad (optional):             Boolean. Enable quad mesh output. Default: false.
+                               If true and face_limit not set, default face_limit = 10000.
+                               Note: Forces output to FBX format.
+
+  compress (optional):         Compression type.
+                               "geometry": meshopt compression.
+
+  smart_low_poly (optional):   Boolean. Generate low-poly with hand-crafted topology.
+                               Less complex inputs work best. May fail on complex models.
+                               Default: false.
+
+  generate_parts (optional):   Boolean. Generate segmented 3D model with editable parts.
+                               Default: false.
+                               NOT compatible with texture=true, pbr=true, or quad=true.
+
+  export_uv (optional):        Boolean. Controls UV unwrapping during generation.
+                               Default: true. Set false for faster generation and
+                               smaller model size (UV handled during texturing).
+
+  --- Options below: only valid for model_version >= v3.0-20250812 ---
+
+  geometry_quality (optional):  "standard" (default) or "detailed".
+                               detailed = Ultra Mode (maximum detail).
+
+Output (on success):
+  model, base_model, pbr_model, rendered_image (all URLs, expire in 5 min).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Check task ID
+  400   2002  Task type unsupported                      Check task type
+  400   2008  Content policy violation                   Modify input and retry
+  403   2010  Insufficient credits                       Purchase more credits
+  400   2015  Deprecated version                         Use higher version
+  400   2017  Invalid model version                      Check available versions
+  400   2018  Model too complex to remesh                Try another model
+
+--------------------------------------------------------------------------------
+4.4 IMAGE TO MODEL (type: image_to_model)
+--------------------------------------------------------------------------------
+
+Request:
+  type (required):             "image_to_model"
+
+  model_version (optional):    Available versions:
+                               - Turbo-v1.0-20250506
+                               - v3.0-20250812
+                               - v2.5-20250123 (default)
+                               - v2.0-20240919
+                               - v1.4-20240625
+                               - v1.3-20240522 (Deprecated)
+
+  file (required):             Image input.
+                               Resolution: 20x20px - 6000x6000px. Suggested > 256x256px.
+    type:       File type (specify correctly though not validated)
+    file_token: From upload (mutually exclusive with url and object)
+    url:        Direct URL, JPEG/PNG, max 20MB (mutually exclusive)
+    object:     From STS upload (Strongly Recommended, mutually exclusive)
+      bucket: "tripo-data"
+      key:    resource_uri from STS token
+
+  model_seed (optional):       Integer. Random seed for geometry generation.
+                               For model_version >= v2.0: same seed = same model.
+
+  enable_image_autofix (optional): Boolean. Optimize input image for better results.
+                               Takes longer. Default: false.
+
+  --- Options below: only valid for model_version >= v2.0-20240919 ---
+
+  face_limit (optional):       Same as text_to_model.
+  texture (optional):          Boolean. Default: true.
+  pbr (optional):              Boolean. Default: true. If true, texture forced true.
+  texture_seed (optional):     Integer. Same seed = same textures.
+  texture_alignment (optional): "original_image" (default) or "geometry".
+                               original_image: prioritizes visual fidelity to source.
+                               geometry: prioritizes 3D structural accuracy.
+  texture_quality (optional):  "standard" (default) or "detailed".
+  auto_size (optional):        Boolean. Default: false.
+  orientation (optional):      "default" (default) or "align_image".
+                               align_image: auto-rotate model to align with input image.
+  quad (optional):             Boolean. Default: false. Forces FBX output.
+  compress (optional):         "geometry": meshopt compression.
+  smart_low_poly (optional):   Boolean. Default: false.
+  generate_parts (optional):   Boolean. Default: false. Incompatible with texture/pbr/quad.
+  export_uv (optional):        Boolean. Default: true.
+
+  --- Options below: only valid for model_version >= v3.0-20250812 ---
+
+  geometry_quality (optional):  "standard" (default) or "detailed" (Ultra Mode).
+
+Output (on success):
+  model, base_model, pbr_model, rendered_image (all URLs, expire in 5 min).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Check task ID
+  400   2002  Task type unsupported                      Check task type
+  400   2003  Input file empty                           Check file or firewall
+  400   2004  File type unsupported                      Check supported types
+  400   2008  Content policy violation                   Modify input and retry
+  403   2010  Insufficient credits                       Purchase more credits
+  500   2014  Audit service error                        Retry or contact support
+  400   2015  Deprecated version                         Use higher version
+  400   2017  Invalid model version                      Check available versions
+  400   2018  Model too complex to remesh                Try another model
+  404   2019  File not found                             Verify file reference
+
+--------------------------------------------------------------------------------
+4.5 MULTIVIEW TO MODEL (type: multiview_to_model)
+--------------------------------------------------------------------------------
+
+Request:
+  type (required):             "multiview_to_model"
+
+  model_version (optional):    Available versions:
+                               - v3.0-20250812
+                               - v2.5-20250123 (default)
+                               - v2.0-20240919
+                               - v1.4-20240625 (Deprecated)
+
+  files (required):            List of exactly 4 image inputs in order:
+                               [front, left, back, right]
+                               - Front input cannot be omitted.
+                               - Other views may be omitted (empty object {}).
+                               - Must use at least 2 images.
+                               - Each image: 20x20px - 6000x6000px. Suggested > 256x256px.
+                               - Directions: [0deg, 90deg, 180deg, 270deg].
+                               - "left" means the left arm of the character.
+    (each element has: type, file_token, url, object -- same format as other file inputs)
+
+  face_limit (optional):       Same as text_to_model.
+  texture (optional):          Boolean. Default: true.
+  pbr (optional):              Boolean. Default: true. If true, texture forced true.
+  texture_seed (optional):     Integer. Same seed = same textures.
+  texture_alignment (optional): "original_image" (default) or "geometry".
+  texture_quality (optional):  "standard" (default) or "detailed".
+  auto_size (optional):        Boolean. Default: false.
+  orientation (optional):      "default" (default) or "align_image".
+  quad (optional):             Boolean. Default: false. Forces FBX output.
+  compress (optional):         "geometry": meshopt compression.
+  smart_low_poly (optional):   Boolean. Default: false.
+  generate_parts (optional):   Boolean. Default: false. Incompatible with texture/pbr/quad.
+  export_uv (optional):        Boolean. Default: true.
+
+  --- Only valid for model_version >= v3.0-20250812 ---
+
+  geometry_quality (optional):  "standard" (default) or "detailed" (Ultra Mode).
+
+Output (on success):
+  model, base_model, pbr_model, rendered_image (all URLs, expire in 5 min).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Check task ID
+  400   2002  Task type unsupported                      Check task type
+  400   2003  Input file empty                           Check file or firewall
+  400   2004  File type unsupported                      Check supported types
+  400   2008  Content policy violation                   Modify input and retry
+  403   2010  Insufficient credits                       Purchase more credits
+  500   2014  Audit service error                        Retry or contact support
+  400   2015  Deprecated version                         Use higher version
+  400   2017  Invalid model version                      Check available versions
+  400   2018  Model too complex to remesh                Try another model
+  404   2019  File not found                             Verify file reference
+
+--------------------------------------------------------------------------------
+4.6 REFINE MODEL (type: refine_model)
+--------------------------------------------------------------------------------
+
+Note: Only for model_version < v2.0-20240919. Not supported for v2.0+.
+
+Request:
+  type (required):             "refine_model"
+  draft_model_task_id (required): Task ID of a draft model. Supported source types:
+                               - text_to_model
+                               - image_to_model
+                               - multiview_to_model
+
+Output (on success):
+  model, rendered_image (URLs, expire in 5 minutes).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Draft task missing or wrong user
+  400   2002  Task type unsupported                      Check task type
+  400   2006  Not a draft task                           Use a draft model to refine.
+                                                        Cannot refine non-draft or refine twice.
+  400   2007  Draft task status not success              Use a successful draft task
+  403   2010  Insufficient credits                       Purchase more credits
+
+
+================================================================================
+5. TEXTURE
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 TEXTURE MODEL (type: texture_model)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "texture_model"
+
+  original_model_task_id (required): Task ID of a previous model. Supported source types:
+                               - text_to_model
+                               - image_to_model
+                               - multiview_to_model
+                               - texture_model
+                               - import_model
+                               Source model_version must be one of:
+                               Turbo-v1.0-20250506, v2.0-20240919,
+                               v2.5-20250123, v3.0-20250812.
+
+  texture_prompt (optional if model was generated via API):
+    Three mutually exclusive sub-fields:
+
+    text:   Prompt text for texture (mutually exclusive with image, images).
+
+    image:  Single prompt image for texture (mutually exclusive with text, images).
+            Same file format as other file inputs (type, file_token, url, object).
+            Resolution: 20px-6000px. Suggested > 256px.
+
+    images: List of exactly 4 prompt images in order [front, left, back, right]
+            (mutually exclusive with text, image).
+            Front cannot be omitted. Use at least 2 images.
+            Each: 20x20px - 6000x6000px. Suggested > 256x256px.
+            Same file format as other file inputs.
+
+    style_image (optional): Reference image for artistic style influence.
+            Resolution: 20px-6000px. Suggested > 256px.
+            Same file format: type, file_token, url, object.
+
+  texture (optional):          Boolean. Enable texturing. Default: true.
+                               Set false to only update PBR texture (with pbr=true).
+
+  pbr (optional):              Boolean. Enable PBR. Default: true.
+
+  texture_seed (optional):     Integer. Same seed = same textures.
+
+  texture_alignment (optional): "original_image" (default) or "geometry".
+
+  texture_quality (optional):  "standard" (default) or "detailed".
+                               Behavior matrix for "detailed":
+                               - texture=false, pbr=false: Upscale texture to 4K
+                                 (PBR removed). Only for v3.0-20250812.
+                               - texture=false, pbr=true: Generate PBR with current texture.
+                               - texture=true, pbr=false: Regenerate HD texture without PBR.
+                               - texture=true, pbr=true: Regenerate HD texture with PBR.
+                               Not allowed: texture_quality=standard, texture=false, pbr=false.
+
+  part_names (optional):       List of part names from Mesh Segmentation.
+                               Default: all parts from segmentation.
+
+  compress (optional):         "geometry": meshopt compression.
+
+  model_version (optional):    Texture generation model version.
+                               - v2.5-20250123 (default)
+                               - v3.0-20250812
+                               - v2.0-20240919 (Deprecated)
+
+  bake (optional):             Boolean. Bake textures (combine advanced material
+                               effects into base textures). Default: true.
+
+Output (on success):
+  model, pbr_model, rendered_image (URLs, expire in 5 minutes).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Original task missing or wrong user
+  400   2002  Task type unsupported                      Check task type
+  400   2003  Input file empty                           Check file in texture_prompt
+  400   2004  File type unsupported                      Check format in texture_prompt
+  400   2006  Invalid original task type                 Provide a valid task
+  400   2007  Original task status not success           Use a successful task
+  403   2010  Insufficient credits                       Purchase more credits
+  500   2014  Audit service error                        Retry or contact support
+  404   2019  File not found                             Verify file reference in texture_prompt
+
+
+================================================================================
+6. IMPORT MODEL
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 IMPORT MODEL (type: import_model)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "import_model"
+  file (required):             File input.
+    object (Strongly Recommended): From STS upload.
+      bucket: "tripo-data"
+      key:    resource_uri from STS token
+
+Behavior:
+  Imported models can be used with post-processing tasks just like generated models.
+
+Output (on success):
+  model: URL to imported model (expires in 5 minutes).
+
+Errors:
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  400   2002  Task type unsupported                      Check task type
+  400   2003  Input file empty                           Check file or firewall
+  400   2004  File type unsupported                      Check supported types
+  400   2008  Content policy violation                   Modify input and retry
+  403   2010  Insufficient credits                       Purchase more credits
+  500   2014  Audit service error                        Retry or contact support
+  404   2019  File not found                             Verify file reference
+
+
+================================================================================
+7. MESH EDITING
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 MESH SEGMENTATION (type: mesh_segmentation)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "mesh_segmentation"
+
+  model_version (optional):    Available versions:
+                               - v1.0-20250506
+
+  original_model_task_id (required): Task ID of a previous task. Supported source types:
+                               - text_to_model
+                               - image_to_model
+                               - multiview_to_model
+                               - texture_model
+                               - refine_model
+                               - import_model
+                               - highpoly_to_lowpoly
+
+Behavior:
+  Separates the model into parts based on type and shape. After segmentation,
+  part names are visible in 3D editing software (e.g., Blender collections).
+
+Output (on success):
+  model: URL to segmented model (expires in 5 minutes).
+
+--------------------------------------------------------------------------------
+7.2 MESH COMPLETION (type: mesh_completion)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "mesh_completion"
+
+  model_version (optional):    Available versions:
+                               - v1.0-20250506
+
+  part_names (optional):       List of part names from Mesh Segmentation.
+                               Default: all parts from segmentation.
+
+  original_model_task_id (required): Task ID of a previous task. Supported source types:
+                               - mesh_segmentation
+
+Output (on success):
+  model: URL to completed model (expires in 5 minutes).
+
+--------------------------------------------------------------------------------
+7.3 SMART LOWPOLY (type: highpoly_to_lowpoly)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "highpoly_to_lowpoly"
+
+  original_model_task_id (required): Task ID of a previous task. Supported source types:
+                               - text_to_model
+                               - image_to_model
+                               - multiview_to_model
+                               - texture_model
+                               - refine_model
+                               - import_model
+                               - mesh_segmentation
+                               - mesh_completion
+
+  model_version (optional):    Available versions:
+                               - P-v2.0-20251225
+                               - P-v1.0-20250506 (Deprecated)
+
+  quad (optional):             Boolean. Quad or triangle faces. Default: false.
+
+  part_names (optional):       List of part names from Mesh Segmentation.
+                               Default: empty.
+
+  face_limit (optional):       Face count for output model. Range: 1000-20000.
+
+  bake (optional):             Boolean. Bake model during generation. Default: true.
+
+Output (on success):
+  model: URL to low-poly model (expires in 5 minutes).
+
+Errors (shared for all mesh editing tasks):
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Original task missing or wrong user
+  400   2002  Task type unsupported                      Check task type
+  400   2006  Invalid original task type                 Provide a valid task
+  400   2007  Original task status not success           Use a successful task
+  403   2010  Insufficient credits                       Purchase more credits
+  400   2018  Model too complex to remesh                Try another model
+
+
+================================================================================
+8. ANIMATION
+================================================================================
+
+Animation pipeline: animate_prerigcheck -> animate_rig -> animate_retarget
+
+Best subjects: humans, robots, anime characters with clear four limbs, simple attire.
+Avoid: animals, large structures, food, fused limbs, excessive accessories.
+
+--------------------------------------------------------------------------------
+8.1 PRE-RIG CHECK (type: animate_prerigcheck)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "animate_prerigcheck"
+  original_model_task_id (required): Task ID of a previous task.
+
+Output (on success):
+  riggable: Boolean. true = can be rigged, false = cannot.
+  rig_type: Detected rig type. Default: "biped". Available values:
+            - biped
+            - quadruped
+            - hexapod
+            - octopod
+            - avian
+            - serpentine
+            - aquatic
+
+Note: A model can be rigged even if prerigcheck returns false. A false result
+does not necessarily prevent rigging.
+
+--------------------------------------------------------------------------------
+8.2 RIG (type: animate_rig)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "animate_rig"
+  original_model_task_id (required): Task ID of a previous task.
+
+  out_format (optional):       "glb" (default) or "fbx".
+
+  model_version (optional):    Rigging model version.
+                               - v2.0-20250506
+                               - v1.0-20240301 (default)
+                               Note: v2.0 is only available and recommended for biped.
+
+  rig_type (optional):         Skeletal rig type. Get from prerigcheck output.
+                               Default: "biped".
+
+  spec (optional):             Rigging method. "mixamo" or "tripo". Default: "tripo".
+
+Output (on success):
+  model: URL to rigged GLB or FBX model.
+
+--------------------------------------------------------------------------------
+8.3 RETARGET (type: animate_retarget)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "animate_retarget"
+  original_model_task_id (required): Task ID of a rig task.
+
+  out_format (optional):       "glb" (default) or "fbx".
+
+  bake_animation (optional):   Boolean. Bake animation into model on output.
+                               Default: true. Only works on GLB.
+
+  export_with_geometry (optional): Boolean. Include geometry in output.
+                               Default: true.
+
+  animation (optional):        Single preset animation. One of animation or
+                               animations must be set.
+
+  animations (optional):       Array of preset animations. Max length: 5.
+                               One of animation or animations must be set.
+
+  animate_in_place (optional): Boolean. Animate in fixed place. Default: false.
+
+  PRESET ANIMATIONS:
+
+  For rig model_version v1.0-20240301:
+    Biped presets (see Tripo docs for full list)
+    Quadruped presets
+    Hexapod presets
+    Octopod presets
+    Avian presets
+    Serpentine presets
+    Aquatic presets
+
+  For rig model_version v2.0-20250506:
+    preset:idle
+    preset:walk
+    preset:run
+    preset:dive
+    preset:climb
+    preset:jump
+    preset:slash
+    preset:shoot
+    preset:hurt
+    preset:fall
+    preset:turn
+    preset:quadruped:walk
+    preset:hexapod:walk
+    preset:octopod:walk
+    preset:serpentine:march
+    preset:aquatic:march
+
+Output (on success):
+  model: URL to animated GLB or FBX model.
+
+Errors (shared for all animation tasks):
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Original task missing or wrong user
+  400   2002  Task type unsupported                      Check task type
+  400   2006  Invalid original task type for animate     Provide a valid task
+  400   2007  Original task status not success           Use a successful task
+  403   2010  Insufficient credits                       Purchase more credits
+  400   2016  Deprecated task type                       Use alternative task type
+
+
+================================================================================
+9. POST-PROCESS
+================================================================================
+
+--------------------------------------------------------------------------------
+9.1 STYLIZATION (type: stylize_model)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "stylize_model"
+
+  style (required):            Style to apply. Values:
+                               - lego:      Lego bricks appearance
+                               - voxel:     Voxel-based form
+                               - voronoi:   Voronoi diagram effect
+                               - minecraft: Outputs a .schem file for Minecraft
+
+  original_model_task_id (required): Task ID of a previous task. Supported source types:
+                               - text_to_model
+                               - image_to_model
+                               - multiview_to_model
+                               - texture_model
+                               - refine_model
+                               - import_model
+                               - animate_rig
+                               - animate_retarget
+
+  block_size (optional):       Grid size for minecraft style. Range: 32-128.
+                               Default: 80. Currently only for minecraft.
+
+Output (on success):
+  model: URL to stylized model (expires in 5 minutes).
+
+--------------------------------------------------------------------------------
+9.2 CONVERSION (type: convert_model)
+--------------------------------------------------------------------------------
+
+Endpoint: POST https://api.tripo3d.ai/v2/openapi/task
+
+Request:
+  type (required):             "convert_model"
+
+  format (required):           Target format. Values:
+                               - GLTF: GLTF format
+                               - USDZ: USDZ format
+                               - FBX:  FBX format
+                               - OBJ:  OBJ format (not supported with rigged models)
+                               - STL:  STL format (not supported with rigged models)
+                               - 3MF:  3MF format (not supported with rigged models,
+                                       geometry only)
+                               Note: If performing a second conversion, only format
+                               is supported.
+
+  original_model_task_id (required): Task ID of a previous task. Supported source types:
+                               - text_to_model
+                               - image_to_model
+                               - multiview_to_model
+                               - texture_model
+                               - refine_model
+                               - import_model
+                               - animate_rig
+                               - animate_retarget
+                               - convert (for re-conversion, format only)
+
+  quad (optional):             Boolean. Enable quad remeshing / auto retopology.
+                               Note: GLTF and STL cannot store quad faces; retopology
+                               and face_limit still apply but faces stored as triangles.
+
+  force_symmetry (optional):   Boolean. Force symmetry for quad remeshing.
+                               Only effective when quad is enabled.
+
+  face_limit (optional):       Face count limit. Default: 10000.
+                               With quad: polygon count. Without quad: triangle count.
+
+  flatten_bottom (optional):   Boolean. Flatten the bottom of converted model.
+
+  flatten_bottom_threshold (optional): Bottom flatten depth.
+                               Only effective when flatten_bottom is enabled.
+                               Default: 0.01.
+
+  texture_size (optional):     Diffuse color texture size in pixels.
+                               Default: 2048 (4096 for model_version >= v2.0-20240919).
+                               Must be <= default.
+
+  texture_format (optional):   Diffuse color texture format.
+                               Supports: BMP, DPX, HDR, JPEG, OPEN_EXR, PNG,
+                               TARGA, TIFF, WEBP.
+                               Default: JPEG (PNG for FBX to support Unity).
+
+  pivot_to_center_bottom (optional): Boolean. Set pivot to center bottom.
+                               Default: false.
+
+  scale_factor (optional):     Object scale multiplier. Default: 1.
+
+  with_animation (optional):   Boolean. Include skeletal binding and animation
+                               structure in export. Default: true.
+
+  pack_uv (optional):          Boolean. Combine all UV islands from different parts
+                               into one unified layout and export single texture map.
+                               Default: false.
+
+  bake (optional):             Boolean. Bake textures (combine normal maps, AO, etc.
+                               into base textures). Default: true.
+
+  part_names (optional):       List of part names from Mesh Segmentation.
+
+  animate_in_place (optional): Boolean. Animate in fixed place. Default: false.
+                               No effect if already set true in retarget process.
+
+  export_vertex_colors (optional): Boolean. Include vertex colors in export.
+                               Only for OBJ or GLTF format. Default: false.
+
+  export_orientation (optional): Model facing direction.
+                               Default: "+x". Supports: "-x", "-y", "+y".
+
+  fbx_preset (optional, experimental): Target platform for FBX export compatibility.
+                               Default: "blender". Supports: "3dsmax", "mixamo".
+
+Output (on success):
+  model: URL to converted model (expires in 5 minutes).
+
+Notes:
+  - STL format does not retain textures.
+  - With quad enabled, roughness/metallic texture maps are half the size of
+    base color map.
+
+Errors (shared for stylization and conversion):
+  HTTP  Code  Description                                Suggestion
+  429   2000  Rate limit exceeded                        Retry later
+  404   2001  Task not found                             Original task missing or wrong user
+  400   2002  Task type unsupported                      Check task type
+  400   2006  Invalid original task type                 Provide a valid task
+  400   2007  Original task status not success           Use a successful task
+  403   2010  Insufficient credits                       Purchase more credits
+
+
+================================================================================
+10. ERROR CODE REFERENCE
+================================================================================
+
+Consolidated table of all error codes across the API.
+
+  Code  HTTP  Description                                         Suggestion
+  ----  ----  --------------------------------------------------- ---------------------------------------------------
+  1004  400   Invalid parameter(s)                                 Check API documentation for parameter requirements
+  1005  403   Access denied                                        Check permissions
+  2000  429   Rate limit exceeded                                  Retry later
+  2001  404   Task not found                                       Check task ID / ensure same API key used
+  2002  400   Task type unsupported                                Check task type
+  2003  400   Input file is empty                                  Check file upload / possible firewall rejection
+  2004  400   File type unsupported                                Check supported file formats
+  2006  400   Invalid original task type                           Provide a valid source task
+  2007  400   Original task status not success                     Use a successful task
+  2008  400   Content policy violation                             Modify input and retry; contact support if incorrect
+  2010  403   Insufficient credits                                 Purchase more credits at Billing
+  2014  500   Audit (content moderation) service error             Retry or contact support
+  2015  400   Deprecated version                                   Use higher model version
+  2016  400   Deprecated task type                                 Use alternative task type
+  2017  400   Invalid model version                                Check available versions in documentation
+  2018  400   Model too complex to remesh                          Try another model
+  2019  404   File not found in storage                            Verify file reference (token, URL, or STS object)
+
+================================================================================
+END OF DOCUMENT
+================================================================================
