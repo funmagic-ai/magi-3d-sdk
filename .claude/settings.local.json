@@ -14,7 +14,20 @@
       "Bash(pnpm tsc:*)",
       "Bash(pnpm tsx:*)",
       "Bash(python3:*)",
-      "Bash(pnpm typecheck:*)"
+      "Bash(pnpm typecheck:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm publish:*)",
+      "Bash(pnpm docs:*)",
+      "Bash(git -C /Users/rockywang/Documents/code/funmagic/magi-3d-sdk status)",
+      "Bash(git -C /Users/rockywang/Documents/code/funmagic/magi-3d-sdk diff --stat)",
+      "Bash(git -C /Users/rockywang/Documents/code/funmagic/magi-3d-sdk log --oneline -5)",
+      "Bash(git -C /Users/rockywang/Documents/code/funmagic/magi-3d-sdk check-ignore:*)",
+      "Bash(git -C /Users/rockywang/Documents/code/funmagic/magi-3d-sdk add docs/guides/)",
+      "Bash(git -C /Users/rockywang/Documents/code/funmagic/magi-3d-sdk add .gitignore README.md package.json)",
+      "Bash(git -C:*)",
+      "Bash(npm view:*)",
+      "Bash(npm version:*)"
     ]
   }
 }
